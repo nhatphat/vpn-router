@@ -4,7 +4,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     openvpn \
     oathtool \
     expect \
-    microsocks \
+    dante-server \
     iproute2 \
     iptables \
     procps \
@@ -17,6 +17,7 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY vpn.exp /usr/local/bin/vpn.exp
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY scripts/capture-dns.sh /usr/local/bin/capture-dns.sh
+COPY danted.conf /etc/danted.conf
 
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/vpn.exp /usr/local/bin/healthcheck.sh /usr/local/bin/capture-dns.sh
 

@@ -52,14 +52,15 @@ fi
 #
 # SOCKS kill-switch
 #
-# microsocks runs as user "socks".
+# danted starts as root and drops privileges to user "socks" for the
+# actual proxied connections (see user.unprivileged in danted.conf).
 #
 # Allow:
 #   1. replies for already-established connections
 #   2. loopback traffic (Docker DNS / local traffic)
 #   3. new outbound connections through tun0
 #
-# Reject everything else from microsocks.
+# Reject everything else from danted's unprivileged worker.
 #
 # OpenVPN itself runs as root, so these rules do not affect
 # its connection to the VPN server over eth0.
@@ -97,7 +98,7 @@ iptables -D OUTPUT \
   -m owner --uid-owner "$SOCKS_UID" \
   -j REJECT 2>/dev/null || true
 
-# Allow microsocks replies back to the SOCKS client.
+# Allow danted replies back to the SOCKS client.
 iptables -A OUTPUT \
   -m owner --uid-owner "$SOCKS_UID" \
   -m conntrack --ctstate ESTABLISHED,RELATED \
@@ -146,17 +147,16 @@ while true; do
       touch /run/vpn-ready
 
       #
-      # Run SOCKS as restricted user.
+      # Run SOCKS. danted drops to the restricted "socks" user itself
+      # (see user.unprivileged in danted.conf) for the actual proxied
+      # connections.
       #
       # Kill-switch guarantees:
       #
       #   VPN up   -> SOCKS traffic via tun0
       #   VPN down -> SOCKS traffic blocked
       #
-      runuser -u socks -- \
-        microsocks \
-        -i 0.0.0.0 \
-        -p 1080 &
+      danted -f /etc/danted.conf &
 
       SOCKS_PID=$!
 
@@ -182,17 +182,14 @@ while true; do
         fi
 
         #
-        # Restart microsocks if it crashes while VPN is still alive.
+        # Restart danted if it crashes while VPN is still alive.
         #
         if [[ -n "${SOCKS_PID:-}" ]] && \
            ! kill -0 "$SOCKS_PID" 2>/dev/null; then
 
           log "SOCKS process exited; restarting it"
 
-          runuser -u socks -- \
-            microsocks \
-            -i 0.0.0.0 \
-            -p 1080 &
+          danted -f /etc/danted.conf &
 
           SOCKS_PID=$!
         fi

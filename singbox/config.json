@@ -1,0 +1,77 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "host-dns-router",
+        "server": "127.0.0.1",
+        "server_port": 15353
+      }
+    ],
+    "final": "host-dns-router"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "utun225",
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "mtu": 9000,
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "gvisor"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "socks",
+      "tag": "vpn-direct",
+      "server": "127.0.0.1",
+      "server_port": 1080,
+      "version": "5",
+      "network": "tcp"
+    },
+    {
+      "type": "socks",
+      "tag": "racer",
+      "server": "127.0.0.1",
+      "server_port": 15080,
+      "version": "5",
+      "network": "tcp"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "ip_cidr": [
+          "192.168.0.0/16",
+          "172.16.0.0/12"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "fc00::/7"
+        ],
+        "outbound": "vpn-direct"
+      }
+    ],
+    "final": "racer"
+  }
+}

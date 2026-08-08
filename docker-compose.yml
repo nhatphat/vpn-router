@@ -1,7 +1,6 @@
 services:
   vpn:
     build: .
-    container_name: company-vpn-socks
     restart: always
 
     cap_add:

@@ -16,7 +16,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY vpn.exp /usr/local/bin/vpn.exp
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY scripts/capture-dns.sh /usr/local/bin/capture-dns.sh
 
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/vpn.exp /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/vpn.exp /usr/local/bin/healthcheck.sh /usr/local/bin/capture-dns.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

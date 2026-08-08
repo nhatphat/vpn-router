@@ -27,7 +27,9 @@ spawn openvpn \
     --config $cfg \
     --auth-user-pass $auth \
     --auth-retry interact \
-    --auth-nocache
+    --auth-nocache \
+    --script-security 2 \
+    --up /usr/local/bin/capture-dns.sh
 
 expect {
     -re {(?i)(enter[^\r\n]*(otp|verification[ -]?code|one[ -]?time[^\r\n]*password|token)|otp[^\r\n]*:|verification[ -]?code[^\r\n]*:|challenge[^\r\n]*(otp|token|code))} {

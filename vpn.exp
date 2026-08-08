@@ -1,0 +1,46 @@
+#!/usr/bin/expect -f
+
+# OpenVPN wrapper that automatically answers OTP/TOTP challenge prompts.
+# TOTP is generated fresh every time an OTP-like prompt is seen.
+
+set timeout -1
+
+if {![info exists env(TOTP_SECRET)] || $env(TOTP_SECRET) eq ""} {
+    puts stderr "ERROR: TOTP_SECRET is not set"
+    exit 2
+}
+
+if {![info exists env(VPN_CONFIG)] || $env(VPN_CONFIG) eq ""} {
+    set env(VPN_CONFIG) "/config/company.ovpn"
+}
+
+if {![info exists env(VPN_AUTH_FILE)] || $env(VPN_AUTH_FILE) eq ""} {
+    set env(VPN_AUTH_FILE) "/config/auth.txt"
+}
+
+set cfg $env(VPN_CONFIG)
+set auth $env(VPN_AUTH_FILE)
+
+# auth-user-pass is passed explicitly so the .ovpn does not need to contain it.
+# auth-retry interact keeps challenge/response authentication interactive.
+spawn openvpn \
+    --config $cfg \
+    --auth-user-pass $auth \
+    --auth-retry interact \
+    --auth-nocache
+
+expect {
+    -re {(?i)(enter[^\r\n]*(otp|verification[ -]?code|one[ -]?time[^\r\n]*password|token)|otp[^\r\n]*:|verification[ -]?code[^\r\n]*:|challenge[^\r\n]*(otp|token|code))} {
+        set otp [exec oathtool --totp --base32 $env(TOTP_SECRET)]
+        send -- "$otp\r"
+        exp_continue
+    }
+    eof {
+        catch wait result
+        set exit_status [lindex $result 3]
+        if {$exit_status eq ""} {
+            set exit_status 1
+        }
+        exit $exit_status
+    }
+}

@@ -1,0 +1,31 @@
+services:
+  vpn:
+    build: .
+    container_name: company-vpn-socks
+    restart: always
+
+    cap_add:
+      - NET_ADMIN
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    ports:
+      - "127.0.0.1:${SOCKS_PORT:-1080}:1080"
+
+    environment:
+      TOTP_SECRET: "${TOTP_SECRET}"
+      VPN_CONFIG: "/config/company.ovpn"
+      VPN_AUTH_FILE: "/config/auth.txt"
+      RETRY_DELAY: "${RETRY_DELAY:-5}"
+
+    volumes:
+      - ./company.ovpn:/config/company.ovpn:ro
+      - ./auth.txt:/config/auth.txt:ro
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s

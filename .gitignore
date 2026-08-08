@@ -1,0 +1,5 @@
+.env
+auth.txt
+*.ovpn
+*.log
+.DS_Store

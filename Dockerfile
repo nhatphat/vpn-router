@@ -1,0 +1,22 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    openvpn \
+    oathtool \
+    expect \
+    microsocks \
+    iproute2 \
+    iptables \
+    procps \
+    util-linux \
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --no-create-home --shell /usr/sbin/nologin socks
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY vpn.exp /usr/local/bin/vpn.exp
+COPY healthcheck.sh /usr/local/bin/healthcheck.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/vpn.exp /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

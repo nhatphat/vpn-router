@@ -1,0 +1,13 @@
+.git
+.gitignore
+.claude
+.env
+auth.txt
+*.ovpn
+*.log
+*-log*.txt
+.DS_Store
+host-dns-router
+singbox
+README.md
+auth.txt.example

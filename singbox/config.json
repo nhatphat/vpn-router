@@ -1,6 +1,6 @@
 {
   "log": {
-    "level": "info",
+    "level": "warn",
     "timestamp": true
   },
   "dns": {
@@ -38,8 +38,7 @@
       "tag": "vpn-direct",
       "server": "127.0.0.1",
       "server_port": 1080,
-      "version": "5",
-      "network": "tcp"
+      "version": "5"
     },
     {
       "type": "socks",
@@ -51,7 +50,15 @@
     }
   ],
   "route": {
+    "auto_detect_interface": true,
     "rules": [
+      {
+        "process_name": [
+          "host-dns-router"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
       {
         "port": 53,
         "action": "hijack-dns"
@@ -70,6 +77,10 @@
           "fc00::/7"
         ],
         "outbound": "vpn-direct"
+      },
+      {
+        "network": "udp",
+        "outbound": "direct"
       }
     ],
     "final": "racer"

@@ -3,10 +3,9 @@
 //
 // For every query it races two lookups in parallel:
 //   - "public"   -> a normal public DNS resolver, dialed directly off the
-//                   physical interface so it bypasses the TUN's default route.
+//     physical interface so it bypasses the TUN's default route.
 //   - "internal" -> the corporate DNS server pushed by the VPN, reached over
-//                   the container's SOCKS5 proxy (DNS-over-TCP, since
-//                   microsocks has no UDP ASSOCIATE support).
+//     the container's SOCKS5 proxy using UDP ASSOCIATE.
 //
 // If the internal branch answers with a private/CGNAT IP, that answer wins
 // immediately: sing-box's existing "private IP -> SOCKS" route rule then
@@ -16,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -27,7 +25,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"golang.org/x/net/proxy"
 )
 
 // internalDNS tracks the VPN-pushed internal DNS server IPs (a VPN commonly
@@ -177,7 +174,7 @@ func (r *resolver) queryPublic(m *dns.Msg) (*dns.Msg, error) {
 }
 
 // queryInternal resolves m against every VPN-pushed DNS server in parallel,
-// tunneled over the container's SOCKS5 proxy using DNS-over-TCP. A VPN
+// tunneled over the container's SOCKS5 proxy using DNS-over-UDP. A VPN
 // commonly pushes more than one server (primary/secondary); a private-IP
 // answer from any of them wins immediately, otherwise the first successful
 // answer is used.
@@ -225,27 +222,16 @@ func (r *resolver) queryInternal(m *dns.Msg) (*dns.Msg, error) {
 }
 
 func (r *resolver) queryInternalAt(ip string, m *dns.Msg) (*dns.Msg, error) {
-	dialer, err := proxy.SOCKS5("tcp", r.socksAddr, nil, &net.Dialer{Timeout: r.queryTimeout})
-	if err != nil {
-		return nil, fmt.Errorf("build socks dialer: %w", err)
-	}
+	target := &net.UDPAddr{IP: net.ParseIP(ip), Port: 53}
 
-	target := net.JoinHostPort(ip, "53")
-
-	var conn net.Conn
-	if cd, ok := dialer.(proxy.ContextDialer); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), r.queryTimeout)
-		defer cancel()
-		conn, err = cd.DialContext(ctx, "tcp", target)
-	} else {
-		conn, err = dialer.Dial("tcp", target)
-	}
+	conn, err := socksUDPAssociate(r.socksAddr, target, r.queryTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("dial internal dns %s via socks: %w", ip, err)
+		return nil, fmt.Errorf("udp associate to %s via socks: %w", ip, err)
 	}
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(r.queryTimeout))
 
-	client := &dns.Client{Net: "tcp", Timeout: r.queryTimeout}
+	client := &dns.Client{Timeout: r.queryTimeout}
 	resp, _, err := client.ExchangeWithConn(m, &dns.Conn{Conn: conn})
 	if err != nil {
 		return nil, fmt.Errorf("exchange with %s: %w", ip, err)

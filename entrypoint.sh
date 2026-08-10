@@ -125,7 +125,6 @@ log "SOCKS kill-switch installed"
 
 while true; do
   cleanup_socks
-  rm -f /run/vpn-ready
 
   log "Starting OpenVPN..."
 
@@ -143,8 +142,6 @@ while true; do
 
     if ip link show tun0 >/dev/null 2>&1; then
       log "VPN tunnel is up (tun0)"
-
-      touch /run/vpn-ready
 
       #
       # Run SOCKS. danted drops to the restricted "socks" user itself
@@ -198,7 +195,6 @@ while true; do
       done
 
       cleanup_socks
-      rm -f /run/vpn-ready
 
       if kill -0 "$VPN_PID" 2>/dev/null; then
         kill "$VPN_PID" 2>/dev/null || true

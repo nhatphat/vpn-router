@@ -23,7 +23,10 @@ set auth $env(VPN_AUTH_FILE)
 
 # auth-user-pass is passed explicitly so the .ovpn does not need to contain it.
 # auth-retry interact keeps challenge/response authentication interactive.
-spawn openvpn \
+# Disable echo inside the spawned pseudo-terminal before exec so generated OTP
+# values never appear in container logs. Arguments remain positional rather
+# than interpolated into the shell command.
+spawn -noecho sh -c {stty -echo; exec openvpn "$@"} sh \
     --config $cfg \
     --auth-user-pass $auth \
     --auth-retry interact \

@@ -8,7 +8,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     iproute2 \
     iptables \
     procps \
-    util-linux \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --no-create-home --shell /usr/sbin/nologin socks

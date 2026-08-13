@@ -6,3 +6,4 @@ auth.txt
 .DS_Store
 .claude/
 host-dns-router/host-dns-router
+singbox/rules/force-vpn.json

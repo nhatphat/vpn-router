@@ -51,6 +51,14 @@
   ],
   "route": {
     "auto_detect_interface": true,
+    "rule_set": [
+      {
+        "type": "local",
+        "tag": "force-vpn",
+        "format": "source",
+        "path": "singbox/rules/force-vpn.json"
+      }
+    ],
     "rules": [
       {
         "process_name": [
@@ -62,6 +70,21 @@
       {
         "port": 53,
         "action": "hijack-dns"
+      },
+      {
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      },
+      {
+        "rule_set": [
+          "force-vpn"
+        ],
+        "action": "route",
+        "outbound": "vpn-direct"
       },
       {
         "ip_cidr": [

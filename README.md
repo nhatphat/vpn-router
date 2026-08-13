@@ -162,6 +162,49 @@ Useful options:
 
 ## 4. Run sing-box
 
+Create the local force-VPN rule-set before validating or starting sing-box:
+
+```bash
+cp singbox/rules/force-vpn.json.example singbox/rules/force-vpn.json
+```
+
+Edit `singbox/rules/force-vpn.json` to force selected domains or macOS
+processes through the VPN. Keep domain and process matchers in separate rule
+objects: fields inside one rule are combined, while separate rules match
+independently.
+
+```json
+{
+  "version": 4,
+  "rules": [
+    {
+      "domain": ["exact.customer.example"],
+      "domain_suffix": ["customer.example"]
+    },
+    {
+      "process_name": ["CustomerApp"]
+    },
+    {
+      "process_path_regex": [
+        "^/Applications/CustomerApp\\.app/Contents/.*"
+      ]
+    }
+  ]
+}
+```
+
+`domain` matches exact hostnames. `domain_suffix` matches both the listed
+domain and its subdomains. Process rules include TCP and UDP, so matching apps
+fail closed instead of falling back to direct traffic when the VPN is down.
+The route configuration sniffs HTTP Host and TLS/QUIC SNI before applying this
+rule-set. This is required when a TUN connection arrives with only a destination
+IP and has no DNS reverse mapping available to the router.
+Delete an unused rule object entirely; an object such as
+`{"process_name": []}` is invalid and fails with `missing conditions`.
+The local rule file is ignored by Git; do not commit customer domains or local
+application details. sing-box 1.10 and newer automatically reload a local
+rule-set after the file changes.
+
 Validate the configuration:
 
 ```bash

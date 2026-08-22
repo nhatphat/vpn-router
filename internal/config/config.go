@@ -129,6 +129,12 @@ type Racer struct {
 	// for links with a much longer round trip than the one it was measured
 	// on, where the ceiling is real.
 	RelayBuffer Size `yaml:"relay_buffer"`
+
+	// LearnedTTL bounds how long the racer trusts a path it worked out
+	// earlier. The network generation counter expires paths as soon as
+	// anything visible changes — the tunnel coming up, the interface getting
+	// a new address — and this covers the changes nothing noticed.
+	LearnedTTL Duration `yaml:"learned_ttl"`
 }
 
 type SingBox struct {
@@ -226,6 +232,7 @@ func Defaults() Config {
 			Listen:      "127.0.0.1:15080",
 			DialTimeout: Duration(1500 * time.Millisecond),
 			RelayBuffer: 32 << 10,
+			LearnedTTL:  Duration(30 * time.Minute),
 		},
 		SingBox: SingBox{
 			Version:       DefaultSingBoxVersion,
@@ -355,6 +362,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Racer.RelayBuffer < 4<<10 {
 		add("racer.relay_buffer must be at least 4KB, got %s", c.Racer.RelayBuffer)
+	}
+	if c.Racer.LearnedTTL < 0 {
+		add("racer.learned_ttl must not be negative")
 	}
 
 	seen := map[string]bool{}

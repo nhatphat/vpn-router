@@ -59,6 +59,12 @@ racer:
   # round trip. On a 10ms path it makes no measurable difference between 32KB
   # and 2MB, which is why the default is the smaller one.
   relay_buffer: 32KB
+  # How long a path the racer worked out is trusted without checking again.
+  # The network generation counter already expires paths when something
+  # visible changes — the tunnel coming up, the interface changing address —
+  # so this only covers changes nothing noticed. 0 disables the time limit and
+  # leaves the generation counter as the only thing expiring a path.
+  learned_ttl: 30m
 
 singbox:
   version: 1.13.19

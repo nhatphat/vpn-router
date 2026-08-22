@@ -45,9 +45,31 @@ type Config struct {
 	// config.Racer.RelayBuffer for why it decides throughput.
 	RelayBuffer int
 
+	// Generation reports which network the machine is currently on. A path
+	// learned on one network says nothing about another.
+	Generation func() uint64
+
+	// LearnedTTL bounds how long a path is trusted without re-checking, so a
+	// change nothing else noticed still expires on its own.
+	LearnedTTL time.Duration
+
 	// Logf receives this component's log lines. Defaults to the standard
 	// logger, which is what the standalone binary used.
 	Logf func(string, ...any)
+}
+
+// learnedPath is a decision and the circumstances it was made under.
+//
+// The decision alone is not enough to reuse. "Direct reached this address"
+// was true of the network the machine was on at the time, and a laptop
+// changes networks: the office, home, a tunnel coming up. Reusing it blindly
+// is how a destination that now needs the VPN keeps going out directly —
+// which fails silently rather than loudly, because a public address usually
+// still accepts the connection.
+type learnedPath struct {
+	via string
+	gen uint64
+	at  time.Time
 }
 
 type racer struct {
@@ -55,8 +77,30 @@ type racer struct {
 	socksAddr   string
 	dialTimeout time.Duration
 	logf        func(string, ...any)
+	generation  func() uint64
+	ttl         time.Duration
 
-	learned sync.Map // addr string -> "direct" | "socks"
+	learned sync.Map // addr string -> learnedPath
+}
+
+// currentGeneration is 0 when nothing tracks network changes, which leaves the
+// time limit as the only thing expiring a path.
+func (r *racer) currentGeneration() uint64 {
+	if r.generation == nil {
+		return 0
+	}
+	return r.generation()
+}
+
+// stale reports whether a learned path should be raced again.
+func (r *racer) stale(p learnedPath, now time.Time) (bool, string) {
+	if p.gen != r.currentGeneration() {
+		return true, "the network changed"
+	}
+	if r.ttl > 0 && now.Sub(p.at) >= r.ttl {
+		return true, fmt.Sprintf("learned %s ago", now.Sub(p.at).Round(time.Second))
+	}
+	return false, ""
 }
 
 func (r *racer) dialDirect(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -131,7 +175,7 @@ func (r *racer) race(ctx context.Context, network, addr string) (net.Conn, error
 			continue
 		}
 
-		r.learned.Store(addr, res.via)
+		r.learned.Store(addr, learnedPath{via: res.via, gen: r.currentGeneration(), at: time.Now()})
 		r.logf("racer: %s -> %s wins", addr, res.via)
 
 		// The loser may still complete later; close it when it does instead
@@ -166,6 +210,8 @@ func Start(ctx context.Context, cfg Config) error {
 		socksAddr:   cfg.SocksAddr,
 		dialTimeout: cfg.DialTimeout,
 		logf:        logf,
+		generation:  cfg.Generation,
+		ttl:         cfg.LearnedTTL,
 	}
 
 	ln, err := net.Listen("tcp", cfg.Listen)

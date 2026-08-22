@@ -365,6 +365,15 @@ netstat -rn -f inet | grep utun225 # the routes sing-box installed
 docker logs -f vpnctl-vpn          # the container, raw
 ```
 
+When the question is "what is it waiting on", the runtime can answer directly.
+Start the daemon with `-pprof 127.0.0.1:15999` — off by default, loopback only,
+and it refuses any other address — then read
+`http://127.0.0.1:15999/debug/pprof/`. Block and mutex profiling come on with
+it, which is what identifies a stall that no amount of reading the code will.
+
+`tools/bench.sh` measures the stack against a transfer that bypasses it; the
+numbers above came from it.
+
 Repeated log lines are folded with a count, so `(x40)` means the same event
 forty times rather than forty things going wrong.
 
@@ -388,6 +397,7 @@ go build -o vpnctl ./cmd/vpnctl
 
 ```text
 cmd/vpnctl/          the CLI, one file per group of subcommands
+tools/               measurement scripts, not part of the binary
 container/context/   the VPN image's build context, embedded in the binary
 internal/
   config/            the YAML file, its defaults, and the executable-safety rule

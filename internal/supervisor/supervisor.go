@@ -206,6 +206,8 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				SocksAddr:   cfg.Docker.Socks,
 				DialTimeout: cfg.Racer.DialTimeout.D(),
 				RelayBuffer: cfg.Racer.RelayBuffer.Bytes(),
+				Generation:  s.currentGeneration,
+				LearnedTTL:  cfg.Racer.LearnedTTL.D(),
 				BindIP:      s.holder.IP,
 				Logf:        s.o.Bus.Logf(logbus.SourceRacer, logbus.LevelInfo),
 			})
@@ -561,6 +563,14 @@ func (s *Supervisor) containerMatchesConfig(ctx context.Context, id string) bool
 	}
 
 	return ins.Config.Labels[vpnbox.LabelSpec] == spec.Labels[vpnbox.LabelSpec]
+}
+
+// currentGeneration is read by the racer, which must not reuse a path it
+// worked out on a different network.
+func (s *Supervisor) currentGeneration() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation
 }
 
 // currentContainerID is read by the VPN-DNS source, which may run before the

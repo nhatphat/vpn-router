@@ -64,7 +64,7 @@ racer:
   # visible changes — the tunnel coming up, the interface changing address —
   # so this only covers changes nothing noticed. 0 disables the time limit and
   # leaves the generation counter as the only thing expiring a path.
-  learned_ttl: 30m
+  learned_ttl: 60m
 
 singbox:
   version: 1.13.19

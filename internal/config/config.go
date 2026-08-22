@@ -232,7 +232,7 @@ func Defaults() Config {
 			Listen:      "127.0.0.1:15080",
 			DialTimeout: Duration(1500 * time.Millisecond),
 			RelayBuffer: 32 << 10,
-			LearnedTTL:  Duration(30 * time.Minute),
+			LearnedTTL:  Duration(60 * time.Minute),
 		},
 		SingBox: SingBox{
 			Version:       DefaultSingBoxVersion,

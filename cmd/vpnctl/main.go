@@ -35,6 +35,7 @@ Usage:
 
   vpnctl menubar              run the menu bar in the foreground
   vpnctl menubar -start       bring the installed menu bar back after quitting it
+  vpnctl version              what this binary is, without asking the network
   vpnctl doctor               check the installation and say how to fix what is wrong
   vpnctl check [flags]        validate the config and the sing-box document it generates
   vpnctl gen-singbox [flags]  print the generated sing-box config.json
@@ -58,6 +59,8 @@ func main() {
 		err = uninstallCmd(os.Args[2:])
 	case "update":
 		err = updateCmd(os.Args[2:])
+	case "version", "--version", "-v":
+		err = versionCmd(nil)
 	case "migrate":
 		err = migrateCmd(os.Args[2:])
 	case "config-example":

@@ -39,6 +39,23 @@ func InstallSingBox(version, fromPath string, pins config.Hashes, logf func(stri
 		return "", err
 	}
 
+	// Installing is idempotent, so most runs of "vpnctl install" — every
+	// upgrade, every configuration change applied by reinstalling — would
+	// otherwise re-fetch an 18MB binary that is already sitting there,
+	// byte for byte.
+	if have, ok := installedHash(); ok {
+		if want, pinned := pins.Lookup(version); pinned && strings.EqualFold(have, want) {
+			logf("sing-box %s already installed and matches the pin", version)
+			return have, nil
+		}
+		if fromPath != "" {
+			if src, err := hashFile(fromPath); err == nil && strings.EqualFold(src, have) {
+				logf("sing-box already matches %s", fromPath)
+				return have, nil
+			}
+		}
+	}
+
 	var (
 		data []byte
 		err  error
@@ -120,6 +137,28 @@ func InstallSingBox(version, fromPath string, pins config.Hashes, logf func(stri
 	}
 
 	return got, nil
+}
+
+// installedHash returns the checksum of the managed binary, if there is one.
+func installedHash() (string, bool) {
+	sum, err := hashFile(SingBoxPath)
+	if err != nil {
+		return "", false
+	}
+	return sum, true
+}
+
+func hashFile(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func downloadAndExtract(url string) ([]byte, error) {

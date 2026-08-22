@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,8 +288,20 @@ func applyOrExplain(socketPath string) error {
 
 func ask(in *bufio.Reader, prompt string) (string, error) {
 	fmt.Printf("%s: ", prompt)
+
 	line, err := in.ReadString('\n')
 	if err != nil && line == "" {
+		if errors.Is(err, io.EOF) {
+			// Reaching the end of input at a question means there was nobody
+			// to answer it. Saying "EOF" describes the mechanism and hides
+			// the cause, which is usually that this was run somewhere without
+			// a terminal attached.
+			return "", fmt.Errorf("no answer for %q\n\n"+
+				"setup asks questions, so it needs a terminal. Run it directly in a shell,\n"+
+				"or feed it the answers in order:\n"+
+				"  printf 'PASSWORD\\nTOTPSECRET\\ny\\n' | vpnctl setup -profile FILE -username NAME",
+				prompt)
+		}
 		return "", err
 	}
 	return strings.TrimSpace(line), nil

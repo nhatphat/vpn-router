@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Read-only: nothing here publishes anything.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # macOS, and not by preference: the router binds a routing socket and the
+    # supervisor drives launchd, so the module does not compile anywhere else.
+    # An Ubuntu runner would fail in a way that says nothing useful.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        # The tests that need a running daemon, a container runtime or a live
+        # network skip themselves; what remains still covers the parts worth
+        # protecting, including the guard pipe, which spawns real processes.
+        run: go test -race ./...
+
+      - name: build
+        run: go build -trimpath ./...

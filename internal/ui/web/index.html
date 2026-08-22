@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vpnctl</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #fbfbfd; --panel: #ffffff; --line: #e3e3e8; --text: #16161a;
+    --dim: #6b6b76; --green: #1a7f37; --yellow: #9a6700; --red: #cf222e;
+    --accent: #0969da; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --panel: #1e1e24; --line: #30303a; --text: #e8e8ed;
+      --dim: #9a9aa5; --green: #3fb950; --yellow: #d29922; --red: #f85149;
+      --accent: #58a6ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2; background: var(--panel);
+    border-bottom: 1px solid var(--line); padding: 12px 16px;
+  }
+  .overall { display: flex; align-items: baseline; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .dot.green { background: var(--green); } .dot.yellow { background: var(--yellow); }
+  .dot.red { background: var(--red); } .dot.unknown { background: var(--dim); }
+  .reason { font-weight: 600; }
+  .meta { color: var(--dim); font-size: 12px; }
+  .components {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 8px; margin-top: 10px;
+  }
+  .comp { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .comp .name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .comp .detail { color: var(--dim); font-size: 12px; margin-top: 2px; word-break: break-word; }
+  .controls {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+  }
+  select, input[type=search], button {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+  }
+  input[type=search] { min-width: 220px; }
+  button { cursor: pointer; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  label { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); }
+  #log { font-family: var(--mono); font-size: 12px; padding: 8px 16px 40vh; }
+  .row { display: flex; gap: 10px; padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+  .row .ts { color: var(--dim); flex: none; }
+  .row .src { flex: none; width: 82px; color: var(--accent); }
+  .row .msg { flex: 1; }
+  .row.warn .msg { color: var(--yellow); }
+  .row.error .msg { color: var(--red); }
+  .row .count { color: var(--dim); }
+  .empty { color: var(--dim); padding: 16px; }
+  .resolvers { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .resolvers .label { color: var(--dim); font-size: 12px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+    font-family: var(--mono);
+  }
+  .pill.off { color: var(--dim); }
+  .pill .note { color: var(--yellow); font-family: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <div class="overall">
+    <span id="dot" class="dot unknown"></span>
+    <span id="reason" class="reason">connecting…</span>
+    <span id="meta" class="meta"></span>
+  </div>
+  <div class="components" id="components"></div>
+  <div class="resolvers" id="resolvers"></div>
+</header>
+
+<div class="controls">
+  <label>source
+    <select id="source">
+      <option value="">all</option>
+      {{range .Sources}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+  </label>
+  <input id="filter" type="search" placeholder="filter text" autocomplete="off">
+  <button id="follow" class="on">following</button>
+  <button id="clear">clear</button>
+  <span class="meta" id="count"></span>
+</div>
+
+<div id="log"><div class="empty">waiting for the daemon…</div></div>
+
+<script>
+const TOKEN = "{{.Token}}";
+const logEl = document.getElementById("log");
+const sourceEl = document.getElementById("source");
+const filterEl = document.getElementById("filter");
+const followEl = document.getElementById("follow");
+const countEl = document.getElementById("count");
+
+let following = true;
+let entries = [];
+let logStream = null;
+
+followEl.onclick = () => {
+  following = !following;
+  followEl.classList.toggle("on", following);
+  followEl.textContent = following ? "following" : "paused";
+  if (following) scrollToEnd();
+};
+document.getElementById("clear").onclick = () => { entries = []; render(); };
+filterEl.oninput = render;
+sourceEl.onchange = openLogStream;
+
+function scrollToEnd() { window.scrollTo(0, document.body.scrollHeight); }
+
+function esc(s) {
+  return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+function time(ts) { return new Date(ts).toLocaleTimeString(); }
+
+function render() {
+  const needle = filterEl.value.toLowerCase();
+  const rows = [];
+  let shown = 0;
+
+  for (const e of entries) {
+    if (needle && !e.msg.toLowerCase().includes(needle) && !e.source.includes(needle)) continue;
+    shown++;
+    const count = e.count > 1 ? ` <span class="count">(x${e.count})</span>` : "";
+    rows.push(
+      `<div class="row ${esc(e.level)}"><span class="ts">${time(e.ts)}</span>` +
+      `<span class="src">${esc(e.source)}</span>` +
+      `<span class="msg">${esc(e.msg)}${count}</span></div>`
+    );
+  }
+
+  logEl.innerHTML = rows.length ? rows.join("") : '<div class="empty">nothing matches</div>';
+  countEl.textContent = shown === entries.length
+    ? `${entries.length} entries`
+    : `${shown} of ${entries.length} entries`;
+  if (following) scrollToEnd();
+}
+
+// Entries are folded by the daemon: the same seq can arrive again with a
+// higher count, so an update replaces in place rather than appending.
+function upsert(entry) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].seq === entry.seq) { entries[i] = entry; return; }
+  }
+  entries.push(entry);
+  if (entries.length > 5000) entries.splice(0, entries.length - 5000);
+}
+
+function openLogStream() {
+  if (logStream) logStream.close();
+  entries = [];
+  render();
+
+  const src = sourceEl.value ? `&source=${encodeURIComponent(sourceEl.value)}` : "";
+  logStream = new EventSource(`/events/logs?t=${TOKEN}${src}`);
+
+  logStream.addEventListener("batch", ev => {
+    for (const e of JSON.parse(ev.data)) upsert(e);
+    render();
+  });
+  logStream.addEventListener("entry", ev => { upsert(JSON.parse(ev.data)); render(); });
+  logStream.addEventListener("error", () => {
+    // EventSource reconnects on its own; say so rather than looking dead.
+    countEl.textContent = "reconnecting…";
+  });
+}
+
+const PHASE_COLOUR = {
+  running: "green", starting: "yellow", degraded: "yellow", backoff: "yellow",
+  unavailable: "yellow", stopped: "yellow", failed: "red", safemode: "red",
+};
+
+function renderStatus(s) {
+  document.getElementById("dot").className = "dot " + (s.overall || "unknown");
+  document.getElementById("reason").textContent = s.reason || "";
+  document.getElementById("meta").textContent =
+    `generation ${s.generation} · vpnctl ${s.version}`;
+
+  renderResolvers(s.resolvers || []);
+
+  document.getElementById("components").innerHTML = (s.components || []).map(c => {
+    const colour = PHASE_COLOUR[c.phase] || "unknown";
+    const restarts = c.restarts ? ` · ${c.restarts} restarts` : "";
+    const err = c.last_error && c.phase !== "running"
+      ? `<div class="detail">${esc(c.last_error)}</div>` : "";
+    return `<div class="comp"><div class="name"><span class="dot ${colour}"></span>` +
+      `${esc(c.name)}</div><div class="detail">${esc(c.phase)}${restarts}</div>` +
+      `<div class="detail">${esc(c.detail || "")}</div>${err}</div>`;
+  }).join("");
+}
+
+// A tick is not enough on its own: a suffix can be on in the config with no
+// resolver file installed, or off while a file somebody else wrote still sends
+// those names here. Say which, rather than implying intent equals effect.
+function renderResolvers(list) {
+  const el = document.getElementById("resolvers");
+  if (!list.length) { el.innerHTML = ""; return; }
+
+  const pills = list.map(r => {
+    let note = "";
+    if (r.foreign) note = "foreign file";
+    else if (r.enabled && !r.installed) note = "not installed";
+    else if (!r.enabled && r.installed) note = "still installed";
+
+    const dot = r.enabled ? "green" : "unknown";
+    return `<span class="pill ${r.enabled ? "" : "off"}">` +
+      `<span class="dot ${dot}"></span>${esc(r.domain)}` +
+      (note ? ` <span class="note">${esc(note)}</span>` : "") + `</span>`;
+  });
+
+  el.innerHTML = `<span class="label">scoped resolvers</span>` + pills.join("");
+}
+
+function openStatusStream() {
+  const stream = new EventSource(`/events/status?t=${TOKEN}`);
+  stream.addEventListener("status", ev => renderStatus(JSON.parse(ev.data)));
+  stream.addEventListener("error", () => {
+    document.getElementById("dot").className = "dot unknown";
+    document.getElementById("reason").textContent = "daemon unreachable";
+  });
+}
+
+openStatusStream();
+openLogStream();
+</script>
+</body>
+</html>

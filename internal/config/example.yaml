@@ -1,0 +1,109 @@
+# vpnctl configuration.
+#
+# Install location: ~/.config/vpnctl/config.yaml (honours XDG_CONFIG_HOME).
+# Relative paths resolve against the directory holding this file.
+# Every value below is also the built-in default, so an omitted key never
+# changes behaviour.
+
+docker:
+  # vpnctl builds the image and creates the container itself through the
+  # Engine API, from a build context embedded in the binary. Compose is not
+  # involved at runtime.
+  project: vpn-router
+  container: vpnctl-vpn
+  # SOCKS5 endpoint the container publishes on the host.
+  socks: 127.0.0.1:1080
+  # Empty = talk to the Engine API over /var/run/docker.sock.
+  host: ""
+  # Where the container writes the VPN-pushed DNS servers, shared with it as
+  # a bind mount. Relative to this file: a container runtime only shares
+  # certain host paths with its virtual machine, and a directory beside this
+  # config is inside the shared area while /usr/local is not. Empty falls
+  # back to reading the file through the Engine API, which always works but
+  # costs a round trip.
+  vpn_dns_file: run/vpn-dns
+
+vpn:
+  config: company.ovpn
+  auth_file: auth.txt
+  env_file: .env
+  retry_delay: 5s
+
+dns_router:
+  listen: 127.0.0.1:15353
+  # Suffixes macOS should resolve here directly, by way of a scoped resolver
+  # written to /etc/resolver. The TUN already captures port 53 while sing-box
+  # runs, so this is not about routing: it states, per suffix and independently
+  # of the tunnel, where those names are answered — which is what keeps an
+  # internal name from ever being asked of a public resolver.
+  #
+  # These files outlive the daemon on purpose. With nothing listening, those
+  # names fail rather than leak to a public resolver, the same fail-closed
+  # choice this project makes for corporate traffic. "vpnctl uninstall"
+  # removes them; removing a line here and running "vpnctl reload" also does.
+  resolver_domains: []
+  public_dns: 1.1.1.1:53
+  # Physical interface that direct traffic binds to, so it bypasses the TUN.
+  bind_interface: en0
+  query_timeout: 900ms
+  # Extra time to wait for the internal branch after public DNS already
+  # answered, in case internal wins with a private-IP answer.
+  grace_window: 200ms
+  refresh_interval: 30s
+
+racer:
+  listen: 127.0.0.1:15080
+  dial_timeout: 1500ms
+
+singbox:
+  version: 1.13.19
+  # Checksums of published binaries, keyed by "<version>/<platform>". These
+  # verify what "install" downloads. Changing `version` above without adding
+  # a matching key here simply means that version is unpinned — install says
+  # so and prints the hash it got, so you can paste it in.
+  #
+  # They do not apply to "install -from-path", which copies a local binary of
+  # different provenance: Homebrew builds from source and hashes differently.
+  sha256:
+    1.13.19/darwin-arm64: 5b75c1dec19488675f725adc7a6e3a7301a553117af835dc47669b1fa918976b
+    1.13.19/darwin-amd64: 078164e43464f2282ae526151411320582c3e60a0294cec24a627edf205305a6
+  # Empty = use the copy vpnctl manages under /usr/local/libexec/vpnctl.
+  binary: ""
+  # The daemon runs sing-box as root and refuses a binary a non-root user can
+  # replace. Homebrew's copy under /opt/homebrew is user-owned, so pointing
+  # `binary` at it needs this flag. Development only.
+  allow_unsafe_binary: false
+  log_level: warn
+  # Relative to this file, so the whole runtime lives in one directory and
+  # does not reach into a source checkout.
+  force_vpn_rules: rules/force-vpn.json
+  # Empty = the running executable's own name. This value is load-bearing:
+  # it is the first route rule, which stops the router's own direct traffic
+  # from being recaptured by the TUN and looping forever.
+  router_process_name: ""
+  tun:
+    interface_name: utun225
+    address: [172.19.0.1/30]
+    mtu: 9000
+    # gvisor is the userspace network stack: slower, but the one this setup
+    # has been running. `system` is faster and has broken macOS networking
+    # here before — benchmark before switching.
+    stack: gvisor
+    strict_route: true
+  # Deep-merged into the generated sing-box document, for rules the schema
+  # above does not cover. Using it reorders JSON keys but not semantics.
+  raw_overrides: {}
+
+supervisor:
+  health_interval: 10s
+  singbox_backoff: {min: 1s, max: 60s}
+  # After this many failures inside the window, stop restarting sing-box and
+  # leave the machine on its native routing rather than flapping the routes.
+  singbox_breaker: {failures: 5, window: 60s}
+  container_backoff: {min: 1s, max: 60s}
+  state_dir: /usr/local/var/vpnctl
+
+ui:
+  # Log/status page, started lazily when opened from the menu bar.
+  web_listen: 127.0.0.1:15900
+  log_buffer_lines: 5000

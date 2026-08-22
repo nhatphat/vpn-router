@@ -1,6 +1,8 @@
 services:
   vpn:
-    build: .
+    # The same build context vpnctl embeds; compose is kept only for working
+    # on the image by hand.
+    build: ./container/context
     restart: always
 
     cap_add:
@@ -21,10 +23,11 @@ services:
     volumes:
       - ./company.ovpn:/config/company.ovpn:ro
       - ./auth.txt:/config/auth.txt:ro
+      # Shared with the host so the DNS router can read the VPN-pushed
+      # servers off the filesystem instead of executing anything in the
+      # container. Only for running this by hand; vpnctl creates the
+      # container itself and mounts the directory beside its config.
+      - ./state/run:/run/shared
 
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 20s
+    # No healthcheck block: it is declared in the Dockerfile now, so it
+    # applies however the container is started.

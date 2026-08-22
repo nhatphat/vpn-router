@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -113,7 +114,7 @@ func bootstrapDaemon() error {
 	// Ignore the error: booting out something that is not loaded is not a
 	// failure, and there is no cheap way to ask first.
 	_, _ = run(launchctl, "bootout", "system/"+DaemonLabel)
-	waitUntilUnloaded(10 * time.Second)
+	waitUntil(10*time.Second, func() bool { return !DaemonLoaded() })
 
 	_, err := run(launchctl, "bootstrap", "system", DaemonPlist)
 	if err == nil {
@@ -132,12 +133,11 @@ func bootstrapDaemon() error {
 	return nil
 }
 
-// waitUntilUnloaded polls until launchd forgets the job, or the timeout
-// expires.
-func waitUntilUnloaded(timeout time.Duration) {
+// waitUntil polls until done reports true, or the timeout expires.
+func waitUntil(timeout time.Duration, done func() bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !DaemonLoaded() {
+		if done() {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -154,16 +154,50 @@ func bootoutDaemon() error {
 
 // bootstrapAgent loads the menu bar into the target user's GUI session. It
 // fails harmlessly when no session exists, e.g. during a remote install.
+// agentctl runs launchctl against a user's GUI domain.
+//
+// When we are root — which is every time install runs — the command has to go
+// through "launchctl asuser". Reaching gui/<uid> directly from a root process
+// fails with a bare "Input/output error", verified on this platform: the same
+// bootstrap that root could not perform succeeded immediately when run as the
+// user. asuser puts the command inside that user's bootstrap context, which is
+// where their GUI domain actually lives.
+func agentctl(uid int, args ...string) (string, error) {
+	if os.Geteuid() == 0 {
+		return run(launchctl, append([]string{"asuser", strconv.Itoa(uid), launchctl}, args...)...)
+	}
+	return run(launchctl, args...)
+}
+
+// bootstrapAgent loads the menu bar, replacing any previous instance.
 func bootstrapAgent(t *Target) error {
 	domain := fmt.Sprintf("gui/%d", t.UID)
-	_, _ = run(launchctl, "bootout", domain+"/"+AgentLabel)
+	label := domain + "/" + AgentLabel
 
-	_, err := run(launchctl, "bootstrap", domain, t.AgentPlist())
-	return err
+	_, _ = agentctl(t.UID, "bootout", label)
+	// Unloading is not synchronous, and bootstrapping into that window fails
+	// the same way the daemon's did.
+	waitUntil(10*time.Second, func() bool { return !AgentLoaded(t.UID) })
+
+	_, err := agentctl(t.UID, "bootstrap", domain, t.AgentPlist())
+	if err == nil {
+		return nil
+	}
+
+	if !AgentLoaded(t.UID) {
+		return err
+	}
+
+	// Loaded after all, so the bootstrap raced a slow unload. Restart it in
+	// place to pick up the new binary.
+	if _, kerr := agentctl(t.UID, "kickstart", "-k", label); kerr != nil {
+		return fmt.Errorf("%w (and restarting the loaded job failed: %v)", err, kerr)
+	}
+	return nil
 }
 
 func bootoutAgent(t *Target) error {
-	_, err := run(launchctl, "bootout", fmt.Sprintf("gui/%d/%s", t.UID, AgentLabel))
+	_, err := agentctl(t.UID, "bootout", fmt.Sprintf("gui/%d/%s", t.UID, AgentLabel))
 	if err != nil && strings.Contains(err.Error(), "No such process") {
 		return nil
 	}
@@ -241,7 +275,7 @@ func RemoveStaleDaemonJobs(logf func(string, ...any)) {
 func RemoveStaleAgentJobs(t *Target, logf func(string, ...any)) {
 	dir := filepath.Join(t.HomeDir, "Library", "LaunchAgents")
 	for _, job := range findStaleJobs(dir, AgentLabel) {
-		_, _ = run(launchctl, "bootout", fmt.Sprintf("gui/%d/%s", t.UID, job.Label))
+		_, _ = agentctl(t.UID, "bootout", fmt.Sprintf("gui/%d/%s", t.UID, job.Label))
 		if err := os.Remove(job.Path); err == nil && logf != nil {
 			logf("unloaded and removed a job from an earlier name: %s", job.Label)
 		}
@@ -251,13 +285,13 @@ func RemoveStaleAgentJobs(t *Target, logf func(string, ...any)) {
 // StartAgent brings the menu bar back after its Quit item was used. launchd
 // remembers the job; it just is not running.
 func StartAgent(t *Target) error {
-	_, err := run(launchctl, "kickstart", fmt.Sprintf("gui/%d/%s", t.UID, AgentLabel))
+	_, err := agentctl(t.UID, "kickstart", fmt.Sprintf("gui/%d/%s", t.UID, AgentLabel))
 	return err
 }
 
 // AgentLoaded reports whether launchd knows about the menu bar job.
 func AgentLoaded(uid int) bool {
-	_, err := run(launchctl, "print", fmt.Sprintf("gui/%d/%s", uid, AgentLabel))
+	_, err := agentctl(uid, "print", fmt.Sprintf("gui/%d/%s", uid, AgentLabel))
 	return err == nil
 }
 

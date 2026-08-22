@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,11 @@ import (
 
 	"vpn-router/internal/config"
 )
+
+// ErrAlreadyInstalled says the managed binary was already what would have been
+// installed. It is not a failure; it is returned so the caller does not
+// announce an installation that did not happen.
+var ErrAlreadyInstalled = errors.New("sing-box is already installed")
 
 // releaseURL builds the official download URL for a sing-box version.
 func releaseURL(version string) string {
@@ -45,13 +51,13 @@ func InstallSingBox(version, fromPath string, pins config.Hashes, logf func(stri
 	// byte for byte.
 	if have, ok := installedHash(); ok {
 		if want, pinned := pins.Lookup(version); pinned && strings.EqualFold(have, want) {
-			logf("sing-box %s already installed and matches the pin", version)
-			return have, nil
+			logf("sing-box %s already installed at %s and matches the pin", version, SingBoxPath)
+			return have, ErrAlreadyInstalled
 		}
 		if fromPath != "" {
 			if src, err := hashFile(fromPath); err == nil && strings.EqualFold(src, have) {
-				logf("sing-box already matches %s", fromPath)
-				return have, nil
+				logf("sing-box at %s already matches %s", SingBoxPath, fromPath)
+				return have, ErrAlreadyInstalled
 			}
 		}
 	}

@@ -3,6 +3,7 @@ package installer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,10 +128,16 @@ func Install(o Options) error {
 		version = config.DefaultSingBoxVersion
 	}
 	sum, err := InstallSingBox(version, o.SingBoxFrom, cfg.SingBox.SHA256, o.logf)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrAlreadyInstalled):
+		// Nothing was written, so saying "installed" would be a small lie —
+		// and a log that says things that are not quite true is one nobody
+		// reads carefully.
+	case err != nil:
 		return err
+	default:
+		o.logf("installed %s", SingBoxPath)
 	}
-	o.logf("installed %s", SingBoxPath)
 
 	if err := ensureRulesFile(cfg, target, o); err != nil {
 		return err

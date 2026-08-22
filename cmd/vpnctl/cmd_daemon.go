@@ -26,6 +26,7 @@ func daemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.yaml")
 	socketPath := fs.String("socket", ipc.DefaultSocket, "control socket path")
+	pprofAddr := fs.String("pprof", "", "serve Go profiles on this loopback address, e.g. 127.0.0.1:15999")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -61,6 +62,10 @@ func daemon(args []string) error {
 	// Mirror the bus to stderr, which launchd captures into the daemon's log
 	// file. Without this a crash before the socket exists would be invisible.
 	go mirrorToStderr(bus)
+
+	if *pprofAddr != "" {
+		startPprof(*pprofAddr, bus.Logf(logbus.SourceSupervisor, logbus.LevelWarn))
+	}
 
 	exe, err := os.Executable()
 	if err != nil {

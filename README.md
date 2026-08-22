@@ -278,9 +278,35 @@ to direct when the VPN is down.
 
 ### About `stack: system`
 
-`gvisor` is a userspace network stack: slower, and the one this setup has been
-running. `system` is faster and has broken networking on the machine this was
-developed on. It is a knob so you can benchmark it, not a recommendation.
+`gvisor` is a userspace network stack and `system` uses the host's. `system` is
+usually described as faster, and it has broken networking on the machine this
+was developed on. It is a knob so you can measure it, not a recommendation —
+and on the evidence below there is nothing here worth taking that risk for.
+
+## What the stack costs
+
+Measured against the same transfer bypassing it entirely, same destination,
+samples interleaved so a change in the network hurts both equally:
+
+| | direct | through the stack |
+|---|---|---|
+| download, 20MB × 5 | 25.15 MB/s | 26.28 MB/s |
+| connection setup, 1KB × 15 | 157 ms | 163 ms |
+
+Throughput is indistinguishable, and a new connection costs about 6ms more.
+Both userspace hops — sing-box's network stack and the racer's relay — are in
+that 6ms. There is no throughput case for changing the data path.
+
+`tcp connect` measured through the TUN looks *faster* than direct, and that is
+not a speed-up: sing-box completes the handshake locally before any real
+connection exists, so the cost moves into the TLS handshake instead. It is the
+behaviour the racer depends on — see the comment at the top of
+`internal/racer` — and it means `time_connect` means nothing here.
+
+This was worth measuring for a reason. Before the launchd job's `ProcessType`
+was corrected, the same comparison read 0.91 MB/s against 23.14 — the stack
+looked like it cost 96% of the machine's throughput, and the obvious suspects
+were the network stack and the double relay. Neither was involved.
 
 ## Failure behaviour
 

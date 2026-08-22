@@ -119,6 +119,16 @@ type DNSRouter struct {
 type Racer struct {
 	Listen      string   `yaml:"listen"`
 	DialTimeout Duration `yaml:"dial_timeout"`
+	// RelayBuffer is how much the relay moves per read-write cycle.
+	//
+	// The default is what measurement supports, not what theory suggested.
+	// The reasoning that a read-then-write loop caps throughput near
+	// buffer/RTT is sound, and the arithmetic matched the slow transfers that
+	// prompted this setting almost exactly — but sweeping 32KB to 2MB moved
+	// nothing, because the cause was elsewhere entirely. It is kept as a knob
+	// for links with a much longer round trip than the one it was measured
+	// on, where the ceiling is real.
+	RelayBuffer Size `yaml:"relay_buffer"`
 }
 
 type SingBox struct {
@@ -215,6 +225,7 @@ func Defaults() Config {
 		Racer: Racer{
 			Listen:      "127.0.0.1:15080",
 			DialTimeout: Duration(1500 * time.Millisecond),
+			RelayBuffer: 32 << 10,
 		},
 		SingBox: SingBox{
 			Version:       DefaultSingBoxVersion,
@@ -341,6 +352,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Racer.DialTimeout <= 0 {
 		add("racer.dial_timeout must be positive")
+	}
+	if c.Racer.RelayBuffer < 4<<10 {
+		add("racer.relay_buffer must be at least 4KB, got %s", c.Racer.RelayBuffer)
 	}
 
 	seen := map[string]bool{}

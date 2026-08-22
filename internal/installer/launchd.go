@@ -39,7 +39,24 @@ func daemonPlist(configPath string) string {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>ProcessType</key><string>Background</string>
+  <!--
+    Standard, stated rather than left out, so that nobody helpfully changes it
+    to something that sounds tidier for a daemon.
+
+    Measured on this machine, same binary and config, only this key differing,
+    with a direct transfer as a control in every round:
+
+      Background    1.17 MB/s        Standard      9.38 MB/s
+      Adaptive      1.21 MB/s        Interactive   8.30 MB/s
+
+    Background is a throttled scheduling and I/O class for work nobody is
+    waiting on, and every byte through here is a byte an application is
+    waiting on. Adaptive is no better in practice: it starts in the same
+    throttled band and is only promoted while the job holds an XPC
+    transaction, which this daemon never declares. Interactive would work, but
+    it asks for elevated priority this does not need.
+  -->
+  <key>ProcessType</key><string>Standard</string>
   <key>StandardOutPath</key><string>%s/daemon.log</string>
   <key>StandardErrorPath</key><string>%s/daemon.log</string>
 </dict>

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/things-go/go-socks5"
+	"github.com/things-go/go-socks5/bufferpool"
 	"golang.org/x/net/proxy"
 
 	"vpn-router/internal/netmon"
@@ -39,6 +40,10 @@ type Config struct {
 	// BindIP returns the source address for direct dials, re-read on every
 	// dial so a later interface change is picked up.
 	BindIP netmon.IPFunc
+
+	// RelayBuffer is how much data one read-write cycle moves; see
+	// config.Racer.RelayBuffer for why it decides throughput.
+	RelayBuffer int
 
 	// Logf receives this component's log lines. Defaults to the standard
 	// logger, which is what the standalone binary used.
@@ -168,11 +173,20 @@ func Start(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("racer listen %s: %w", cfg.Listen, err)
 	}
 
-	server := socks5.NewServer(socks5.WithDial(r.dial))
+	buffer := cfg.RelayBuffer
+	if buffer < 4<<10 {
+		buffer = 4 << 10
+	}
+
+	server := socks5.NewServer(
+		socks5.WithDial(r.dial),
+		socks5.WithBufferPool(bufferpool.NewPool(buffer)),
+	)
 
 	errCh := make(chan error, 1)
 	go func() {
-		logf("racer listening on %s (socks5), dial-timeout=%s", cfg.Listen, cfg.DialTimeout)
+		logf("racer listening on %s (socks5), dial-timeout=%s, relay-buffer=%dKB",
+			cfg.Listen, cfg.DialTimeout, buffer>>10)
 		errCh <- server.Serve(ln)
 	}()
 

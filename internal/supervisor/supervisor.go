@@ -205,6 +205,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				Listen:      cfg.Racer.Listen,
 				SocksAddr:   cfg.Docker.Socks,
 				DialTimeout: cfg.Racer.DialTimeout.D(),
+				RelayBuffer: cfg.Racer.RelayBuffer.Bytes(),
 				BindIP:      s.holder.IP,
 				Logf:        s.o.Bus.Logf(logbus.SourceRacer, logbus.LevelInfo),
 			})

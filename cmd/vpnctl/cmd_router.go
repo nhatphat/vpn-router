@@ -105,6 +105,7 @@ func runRouter(args []string) error {
 			Listen:      cfg.Racer.Listen,
 			SocksAddr:   cfg.Docker.Socks,
 			DialTimeout: cfg.Racer.DialTimeout.D(),
+			RelayBuffer: cfg.Racer.RelayBuffer.Bytes(),
 			BindIP:      bindIP,
 		})
 	})

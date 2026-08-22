@@ -54,6 +54,11 @@ dns_router:
 racer:
   listen: 127.0.0.1:15080
   dial_timeout: 1500ms
+  # How much the relay moves per read-write cycle. A read-then-write loop can
+  # cap throughput near buffer/RTT, so this is a knob for links with a long
+  # round trip. On a 10ms path it makes no measurable difference between 32KB
+  # and 2MB, which is why the default is the smaller one.
+  relay_buffer: 32KB
 
 singbox:
   version: 1.13.19

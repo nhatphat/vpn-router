@@ -222,9 +222,13 @@ type State struct {
 }
 
 type Inspect struct {
-	ID    string `json:"Id"`
-	Name  string `json:"Name"`
-	State State  `json:"State"`
+	ID     string `json:"Id"`
+	Name   string `json:"Name"`
+	State  State  `json:"State"`
+	Config struct {
+		Image  string            `json:"Image"`
+		Labels map[string]string `json:"Labels"`
+	} `json:"Config"`
 }
 
 func (c *Client) Inspect(ctx context.Context, id string) (*Inspect, error) {

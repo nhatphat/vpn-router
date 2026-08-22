@@ -138,17 +138,28 @@ then:
 Nothing after that needs a password. The daemon is resident, so it comes back
 after a reboot before anyone logs in, and restarts from the CLI are immediate.
 
-Then put your VPN files in place and apply:
+Then point it at your VPN:
 
 ```bash
-cp /path/to/profile.ovpn ~/.config/vpnctl/company.ovpn
-cp /path/to/auth.txt     ~/.config/vpnctl/auth.txt   # username on line 1, password on line 2
-printf 'TOTP_SECRET=YOUR_BASE32_SECRET\n' > ~/.config/vpnctl/.env
-chmod 600 ~/.config/vpnctl/{company.ovpn,auth.txt,.env}
-
-sudo vpnctl install        # recreates the container against the new files
-vpnctl doctor
+vpnctl setup
 ```
+
+It asks for the path to your `.ovpn` profile, your username and password, and
+the Base32 TOTP secret — then writes all three into `~/.config/vpnctl/` with
+the right permissions and recreates the container with them. No `sudo`: these
+are your credentials, in your directory.
+
+The secret is checked while you type it. `setup` generates the code that secret
+produces right now and asks whether it matches your authenticator, because a
+mistyped secret is otherwise indistinguishable from a wrong password or a
+server problem, and only surfaces as a VPN that will not connect.
+
+```
+  That secret produces 287082 right now, valid for 16 more seconds.
+  Does that match your authenticator? [Y/n]:
+```
+
+`vpnctl doctor` when it finishes.
 
 ### Coming from the older manual setup
 
@@ -170,6 +181,7 @@ checkout — `vpnctl doctor` verifies that under `independence`.
 |---|---|
 | `vpnctl status` | what every component is doing; `-w` to follow |
 | `vpnctl logs` | one merged, tagged log; `-f` to follow, `-source vpn\|singbox\|dns\|racer\|supervisor` |
+| `vpnctl setup` | point it at a `.ovpn` profile and your credentials |
 | `vpnctl doctor` | check the installation and print the fix for anything wrong |
 | `sudo vpnctl update` | install the newest release; `-check` only reports |
 | `vpnctl reload` | apply an edited config, restarting only what changed |
@@ -220,9 +232,9 @@ never changes behaviour.
 ```text
 ~/.config/vpnctl/
 ├── config.yaml            everything configurable
-├── company.ovpn           your OpenVPN profile          (600)
-├── auth.txt               username and password         (600)
-├── .env                   TOTP_SECRET                   (600)
+├── company.ovpn           your OpenVPN profile          (600)  written by setup
+├── auth.txt               username and password         (600)  written by setup
+├── .env                   TOTP_SECRET                   (600)  written by setup
 ├── rules/force-vpn.json   domains and apps forced through the VPN
 └── run/vpn-dns            written by the container, read by the DNS router
 ```

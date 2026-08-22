@@ -319,12 +319,9 @@ func ensureConfig(o Options, t *Target) (path string, created bool, err error) {
 		return path, false, nil
 	}
 
+	// The example already points the shared file at the config directory, so
+	// there is nothing to substitute.
 	body := config.ExampleYAML
-	// A freshly written config can point at the shared bind mount, since the
-	// installer is creating it in the same breath.
-	body = strings.Replace(body,
-		`  vpn_dns_file: ""`,
-		`  vpn_dns_file: `+filepath.Join(StateDir, "run", "vpn-dns"), 1)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return path, false, err
@@ -352,7 +349,7 @@ func ensureRulesFile(cfg *config.Config, t *Target, o Options) error {
 		return nil
 	}
 
-	if err := writeFileAs(path, emptyRuleSet, t.UID, t.GID, 0o644); err != nil {
+	if err := writeFileAs(path, EmptyRuleSet, t.UID, t.GID, 0o644); err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
 	}
 	o.logf("created an empty force-VPN rule-set at %s", path)

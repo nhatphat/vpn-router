@@ -13,6 +13,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -514,13 +515,51 @@ func (s *Supervisor) watchDocker(ctx context.Context) error {
 		s.mu.Unlock()
 
 		s.refreshContainer(ctx)
-		if err := s.followContainer(ctx, id); err != nil && ctx.Err() == nil {
+
+		err = s.followContainer(ctx, id)
+		if errors.Is(err, errSpecChanged) {
+			// Straight back to ensureContainer, which will recreate it. No
+			// pause: the user asked for this and is watching.
+			continue
+		}
+		if err != nil && ctx.Err() == nil {
 			s.logf(logbus.LevelWarn, "container watch ended: %v", err)
 		}
+
 		if !s.sleep(ctx, retry) {
 			return ctx.Err()
 		}
 	}
+}
+
+// errSpecChanged says the running container was built from settings that no
+// longer apply, so it has to be recreated rather than restarted.
+var errSpecChanged = errors.New("container specification changed")
+
+// containerMatchesConfig compares the running container against the
+// specification the current configuration produces.
+//
+// Restarting is not enough when they differ: a container carries its
+// environment and its mounts from creation, so a changed VPN profile, port or
+// TOTP secret would survive a restart untouched — and "restarting vpn" would
+// report success while changing nothing.
+func (s *Supervisor) containerMatchesConfig(ctx context.Context, id string) bool {
+	tag, err := container.ImageTag()
+	if err != nil {
+		return true // cannot tell; do not churn the container over it
+	}
+
+	spec, err := vpnbox.Spec(s.cfg(), tag)
+	if err != nil {
+		return true
+	}
+
+	ins, err := s.docker.Inspect(ctx, id)
+	if err != nil {
+		return true
+	}
+
+	return ins.Config.Labels[vpnbox.LabelSpec] == spec.Labels[vpnbox.LabelSpec]
 }
 
 // currentContainerID is read by the VPN-DNS source, which may run before the
@@ -619,6 +658,12 @@ func (s *Supervisor) followContainer(ctx context.Context, id string) error {
 			s.refreshContainer(ctx)
 
 		case <-s.restart[status.CompVPN]:
+			if !s.containerMatchesConfig(ctx, id) {
+				s.logf(logbus.LevelInfo, "the VPN container predates the current config; recreating it")
+				s.setComp(status.CompVPN, status.PhaseStarting, "recreating", nil)
+				return errSpecChanged
+			}
+
 			s.logf(logbus.LevelInfo, "restarting the VPN container on request")
 			s.setComp(status.CompVPN, status.PhaseStarting, "restarting", nil)
 			if err := s.docker.Restart(ctx, id, 15*time.Second); err != nil {

@@ -9,11 +9,11 @@ import (
 	"vpn-router/internal/config"
 )
 
-// emptyRuleSet is a valid sing-box source rule-set that matches nothing.
+// EmptyRuleSet is a valid sing-box source rule-set that matches nothing.
 // Verified against sing-box 1.13: an empty rules array is accepted, whereas a
 // rule object with no conditions is rejected — so this is the right shape for
 // "no forced domains yet".
-const emptyRuleSet = `{
+const EmptyRuleSet = `{
   "version": 4,
   "rules": []
 }
@@ -85,7 +85,7 @@ func Migrate(repoDir string, o Options) error {
 			if rf.destRel == "rules/force-vpn.json" {
 				// Without this file sing-box refuses to start, so an absent
 				// one becomes an empty rule-set rather than a broken install.
-				if err := writeFileAs(dest, emptyRuleSet, target.UID, target.GID, rf.mode); err != nil {
+				if err := writeFileAs(dest, EmptyRuleSet, target.UID, target.GID, rf.mode); err != nil {
 					return err
 				}
 				copied = append(copied, fmt.Sprintf("%s created empty at %s", rf.label, dest))

@@ -60,14 +60,22 @@ func installCmd(args []string) error {
 
 func uninstallCmd(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
+	purge := fs.Bool("purge", false, "also delete the VPN container, its image and the logs")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	fmt.Println("Removing vpnctl:")
-	return installer.Uninstall(installer.Options{
-		Logf: func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
-	})
+	if err := installer.Uninstall(installer.Options{
+		Purge: *purge,
+		Logf:  func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
+	}); err != nil {
+		return err
+	}
+
+	fmt.Println("\nYour config and credentials are untouched. Reinstall with:")
+	fmt.Println("  curl -fsSL https://raw.githubusercontent.com/nhatphat/vpn-router/main/install.sh | sh")
+	return nil
 }
 
 func migrateCmd(args []string) error {

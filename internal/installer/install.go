@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"vpn-router/container"
 	"vpn-router/internal/config"
 	"vpn-router/internal/dockerctl"
 	"vpn-router/internal/ipc"
@@ -29,6 +30,9 @@ type Options struct {
 	WithMenuBar bool
 	// KeepStopped installs the files without starting the daemon.
 	KeepStopped bool
+	// Purge makes uninstall remove the container, the image and the logs as
+	// well as the parts an ordinary uninstall leaves recoverable.
+	Purge bool
 
 	Logf func(string, ...any)
 }
@@ -439,8 +443,17 @@ func LoadRecord() (*Record, error) {
 	return &r, nil
 }
 
-// Uninstall removes what Install added. The user's config, their secrets and
-// the container are left alone: they are not ours to delete.
+// Uninstall removes what Install added.
+//
+// The user's configuration, their VPN profile and their credentials are never
+// touched: they are not ours to delete, and they are the part that takes real
+// effort to reproduce. Everything vpnctl generated or downloaded goes.
+//
+// The container is stopped rather than left running. It was created with a
+// restart policy, so leaving it would mean a VPN tunnel coming back at every
+// boot with nothing supervising it and a published port on loopback — which is
+// not what someone uninstalling the supervisor is asking for. Stopping is
+// reversible with a single docker start; -purge deletes it and the image too.
 func Uninstall(o Options) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("uninstall must run as root:\n  sudo vpnctl uninstall")
@@ -452,25 +465,23 @@ func Uninstall(o Options) error {
 		o.logf("daemon unloaded")
 	}
 
-	if target, err := ResolveTarget(); err == nil {
+	target, targetErr := ResolveTarget()
+	if targetErr == nil {
 		if err := bootoutAgent(target); err == nil {
 			o.logf("menu bar unloaded")
 		}
 		if err := os.Remove(target.AgentPlist()); err == nil {
 			o.logf("removed %s", target.AgentPlist())
 		}
+		RemoveStaleAgentJobs(target, o.logf)
 	}
+	RemoveStaleDaemonJobs(o.logf)
 
 	if link, err := os.Readlink(SymlinkPath); err == nil && link == BinaryPath {
 		if err := os.Remove(SymlinkPath); err == nil {
 			o.logf("removed %s", SymlinkPath)
 		}
 	}
-
-	if target, err := ResolveTarget(); err == nil {
-		RemoveStaleAgentJobs(target, o.logf)
-	}
-	RemoveStaleDaemonJobs(o.logf)
 
 	for _, p := range []string{DaemonPlist, BinaryPath, SingBoxPath, InstallRecord} {
 		if err := os.Remove(p); err == nil {
@@ -488,6 +499,83 @@ func Uninstall(o Options) error {
 		}
 	}
 
-	o.logf("left in place: your config, your VPN profile and auth file, %s, and the container", StateDir)
+	// Generated output, not state worth keeping: the sing-box document is
+	// rebuilt from the config on every start, and the pid files belong to
+	// processes that are gone.
+	if err := os.RemoveAll(StateDir); err == nil {
+		o.logf("removed %s", StateDir)
+	}
+
+	uninstallContainer(o)
+
+	// Directories that only ever held what was just deleted. RemoveAll is not
+	// used: an empty-only removal leaves anything unexpected in place rather
+	// than deleting a file somebody else put there.
+	for _, d := range []string{LibexecDir, EtcDir} {
+		if err := os.Remove(d); err == nil {
+			o.logf("removed %s", d)
+		}
+	}
+
+	if o.Purge {
+		if err := os.RemoveAll(LogDir); err == nil {
+			o.logf("removed %s", LogDir)
+		}
+	} else {
+		o.logf("kept %s for post-mortems, and your config, VPN profile and credentials", LogDir)
+	}
+
 	return nil
+}
+
+// uninstallContainer stops the container, and removes it and the image when
+// purging.
+func uninstallContainer(o Options) {
+	c, err := dockerctl.New("")
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if err := c.Ping(ctx); err != nil {
+		o.logf("the container runtime is not reachable, so the VPN container was left as it is")
+		return
+	}
+
+	list, err := c.ListByLabel(ctx, vpnbox.LabelOwner+"=true")
+	if err != nil || len(list) == 0 {
+		return
+	}
+
+	for _, ct := range list {
+		if !o.Purge {
+			if ct.State != "running" {
+				continue
+			}
+			if err := c.Stop(ctx, ct.ID, 15*time.Second); err != nil {
+				o.logf("could not stop %s: %v", ct.Name(), err)
+				continue
+			}
+			o.logf("stopped the VPN container %s (\"docker start %s\" brings it back)", ct.Name(), ct.Name())
+			continue
+		}
+
+		if err := c.RemoveContainer(ctx, ct.ID); err != nil {
+			o.logf("could not remove %s: %v", ct.Name(), err)
+			continue
+		}
+		o.logf("removed the VPN container %s", ct.Name())
+	}
+
+	if !o.Purge {
+		return
+	}
+
+	if tag, err := container.ImageTag(); err == nil {
+		if err := c.RemoveImage(ctx, tag); err == nil {
+			o.logf("removed the image %s", tag)
+		}
+	}
 }

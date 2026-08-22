@@ -179,3 +179,13 @@ func (c *Client) Rename(ctx context.Context, id, name string) error {
 	resp.Body.Close()
 	return nil
 }
+
+// RemoveImage deletes an image by tag.
+func (c *Client) RemoveImage(ctx context.Context, tag string) error {
+	resp, err := c.do(ctx, http.MethodDelete, "/images/"+tag, url.Values{"force": {"1"}}, nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}

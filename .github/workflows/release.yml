@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: test
+        run: go test ./...
+
+      - name: build
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          # -trimpath is not cosmetic here. Without it Go records the absolute
+          # path of every source file in the binary, which on a developer's
+          # machine puts their username in a published artefact a hundred
+          # times over. -s -w drops the symbol and debug tables with it.
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=${version}" \
+            -o vpnctl ./cmd/vpnctl
+
+          archive="vpnctl_${version}_darwin_arm64.tar.gz"
+          tar -czf "$archive" vpnctl
+          shasum -a 256 "$archive" > SHA256SUMS
+
+          echo "archive=$archive" >> "$GITHUB_ENV"
+
+      - name: check the artefact carries no build paths
+        run: |
+          set -euo pipefail
+          # A username in a released binary is a leak, and -trimpath is easy to
+          # drop by accident. Fail the release rather than publish one.
+          if strings vpnctl | grep -q "$(pwd)"; then
+            echo "the binary contains build paths; is -trimpath missing?"
+            exit 1
+          fi
+          if strings vpnctl | grep -qE '/Users/[a-zA-Z0-9._-]+/'; then
+            echo "the binary contains a home directory path"
+            strings vpnctl | grep -E '/Users/[a-zA-Z0-9._-]+/' | head
+            exit 1
+          fi
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            "$archive" SHA256SUMS

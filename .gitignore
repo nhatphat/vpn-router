@@ -3,7 +3,11 @@ auth.txt
 *.ovpn
 *.log
 *-log*.txt
+
+# Test fixtures are the exception: they are synthetic and must be present
+# for the tests that read them to run at all.
+!internal/logbus/testdata/*.log
 .DS_Store
 .claude/
-host-dns-router/host-dns-router
+/vpnctl
 singbox/rules/force-vpn.json

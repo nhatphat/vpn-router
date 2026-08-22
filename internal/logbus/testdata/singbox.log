@@ -1,0 +1,25 @@
++0700 2026-08-09 00:00:31 ERROR [1000007919 0ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:31 INFO [1000015838 0ms] inbound/tun[tun-in]: inbound packet connection from 172.19.0.1:40000
++0700 2026-08-09 00:00:31 INFO [1000023757 12ms] dns: exchanged A host0.example.com. 60 IN A 93.184.216.34
++0700 2026-08-09 00:00:32 ERROR [1000031676 1ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:33 ERROR [1000039595 2ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:34 ERROR [1000047514 3ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:34 INFO [1000055433 0ms] inbound/tun[tun-in]: inbound packet connection from 172.19.0.1:40003
++0700 2026-08-09 00:00:35 ERROR [1000063352 4ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:35 INFO [1000071271 12ms] dns: exchanged A host4.example.com. 60 IN A 93.184.216.38
++0700 2026-08-09 00:00:36 ERROR [1000079190 5ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:37 ERROR [1000087109 6ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:37 INFO [1000095028 0ms] inbound/tun[tun-in]: inbound packet connection from 172.19.0.1:40006
++0700 2026-08-09 00:00:38 ERROR [1000102947 7ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:39 ERROR [1000110866 8ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:39 INFO [1000118785 12ms] dns: exchanged A host8.example.com. 60 IN A 93.184.216.42
++0700 2026-08-09 00:00:40 ERROR [1000126704 9ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:40 INFO [1000134623 0ms] inbound/tun[tun-in]: inbound packet connection from 172.19.0.1:40009
++0700 2026-08-09 00:00:41 ERROR [1000142542 10ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:42 ERROR [1000150461 11ms] router: UDP is not supported by outbound: racer
++0700 2026-08-09 00:00:47 INFO network: updated default interface en0, index 13
++0700 2026-08-09 00:00:47 INFO inbound/tun[tun-in]: started at utun225
++0700 2026-08-09 00:00:47 INFO sing-box started (0.00s)
++0700 2026-08-09 00:00:48 WARN [1000158380 900ms] dns: exchange failed for slow.example.com.: context deadline exceeded
++0700 2026-08-09 00:00:49 FATAL start service: initialize inbound/tun[tun-in]: configure tun interface: operation not permitted
++0700 2026-08-09 00:00:50 [36mINFO[0m [38;5;174m[1000166299 3ms][0m dns: exchanged A colour.example.com. 60 IN A 198.51.100.7

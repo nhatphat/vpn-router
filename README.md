@@ -1,297 +1,489 @@
-# VPN router for macOS
+# vpnctl
 
-A split-routing setup that combines:
+Split routing for macOS: corporate traffic through an OpenVPN tunnel, everything
+else straight out of the physical interface, decided per destination rather than
+per application.
 
-- OpenVPN and a Dante SOCKS5 proxy inside Docker
-- a host DNS router for split-horizon DNS
-- a host TCP racer for destinations that may or may not require the VPN
-- sing-box TUN routing for macOS applications
+One binary supervises the whole thing. One configuration file describes it.
 
-The public path is fail-open: when the VPN container is unavailable, public traffic can continue directly. Corporate DNS and private destinations fail closed because Dante is protected by an iptables kill-switch.
+```bash
+sudo vpnctl install     # once
+vpnctl status           # any time, no password
+```
+
+## What it does
+
+Some destinations are only reachable from inside a VPN. Most are not. Routing
+everything through the tunnel is slow and leaks personal traffic through a
+corporate gateway; routing nothing through it means the VPN is useless. So the
+decision has to be made per destination, and it has to be made without asking
+anyone to maintain a list.
+
+Two mechanisms do that. Every DNS lookup is resolved twice in parallel — once
+against a public resolver and once against the DNS servers the VPN pushed — and
+a private-IP answer from the corporate side wins, which makes the destination
+route itself. For destinations whose address looks public but is only reachable
+from inside the tunnel, both paths are dialled at once and the first to connect
+wins, remembered per destination.
 
 ## Architecture
 
 ```text
 macOS applications
         |
-   sing-box TUN
+   sing-box TUN (utun225, auto_route)
         |
-        +-- private destination ----------> Dante SOCKS5 :1080 -> OpenVPN tun0
+        +-- process is vpnctl itself --------> direct        (breaks the DNS loop)
         |
-        +-- ambiguous TCP -> racer :15080 -+-> direct
-        |                                  +-> Dante SOCKS5 -> OpenVPN tun0
+        +-- port 53 ------------------------> hijack-dns --> DNS router :15353
+        |                                                      |
+        |                                     public resolver <+> VPN resolver
+        |                                     (bound to en0)      (via SOCKS)
         |
-        +-- public UDP --------------------> direct
+        +-- sniff HTTP Host, TLS/QUIC SNI     (so the next rule can match names)
+        |
+        +-- matches force-vpn rules --------> SOCKS :1080 --> OpenVPN tun0
+        +-- LAN address --------------------> direct
+        +-- private / CGNAT address --------> SOCKS :1080 --> OpenVPN tun0
+        +-- any other UDP ------------------> direct
+        |
+        +-- any other TCP -----------------> racer :15080 -+-> direct
+                                                           +-> SOCKS :1080
 
-DNS
-  sing-box/macOS -> host DNS router :15353
-                       +-> public DNS directly
-                       +-> VPN-pushed DNS via Dante UDP ASSOCIATE
+  vpnctl daemon (root, launchd)          the VPN container (OpenVPN + Dante)
+    ├── DNS router      :15353/udp         iptables kill-switch: the proxy can
+    ├── TCP racer       :15080/tcp         only leave through tun0, and is
+    ├── sing-box  (child, guarded)         stopped if the tunnel drops
+    └── container control (Engine API)
 ```
 
-Local listeners bind only to `127.0.0.1` by default.
+The DNS router does not tell sing-box where to route anything. It returns an
+address, and sing-box's existing rules decide from the address alone. That is
+why there is no per-domain routing table to maintain.
 
 ## Security properties
 
-- Dante traffic can leave the container only through `tun0`.
-- If OpenVPN disconnects, Dante is stopped and its direct traffic remains blocked.
-- The SOCKS port is published only on host localhost.
-- Generated OTP values are not echoed to container logs.
-- `.env`, VPN profiles, auth files, logs, and local tooling settings are excluded from Git.
-- Secret-bearing local files are also excluded from the Docker build context.
+- The proxy inside the container can only reach the network through `tun0`. If
+  OpenVPN disconnects, it is stopped, and its traffic stays blocked.
+- The SOCKS port is published on loopback only.
+- Public traffic **fails open**: with the VPN down, the resolver falls back to
+  public DNS and the racer falls back to direct.
+- Corporate traffic **fails closed**: destinations matching the force-VPN rules,
+  and private addresses, are never silently sent out directly. This is
+  deliberate and is not a bug to be "fixed".
+- The daemon refuses to execute any binary a non-root user can replace, so a
+  process running as you cannot choose what root runs.
+- The control socket is reachable only by the user the daemon was installed for.
+- Generated one-time codes are never written to logs.
 
-Never commit `.env`, `auth.txt`, or an OpenVPN profile.
+Never commit `.env`, `auth.txt`, or an OpenVPN profile. After installation they
+live in `~/.config/vpnctl/`, outside this repository.
 
 ## Requirements
 
-- Docker Compose with a runtime that supports `/dev/net/tun`
-- Go 1.26 or newer to build the host router
-- sing-box 1.13 or newer for the provided configuration
-- macOS for the provided TUN and split-resolver examples
+- macOS on Apple silicon or Intel
+- A container runtime with `/dev/net/tun`: OrbStack, Docker Desktop, or colima.
+  It is **not** installed for you, and it runs in your login session, so the VPN
+  is unavailable until you log in. Public traffic works regardless.
+- Go 1.26 or newer to build `vpnctl`
+- An OpenVPN profile, its credentials, and the Base32 TOTP secret for its
+  one-time-code challenge
 
-The Docker component can also run on Linux. Host interface names and routing integration must then be adjusted for that system.
+sing-box is installed for you.
 
-## 1. Prepare VPN configuration
-
-Copy an OpenVPN profile into the repository:
-
-```bash
-cp /path/to/profile.ovpn ./company.ovpn
-```
-
-Create the challenge-response auth file:
+## Install
 
 ```bash
-cp auth.txt.example auth.txt
+curl -fsSL https://raw.githubusercontent.com/nhatphat/vpn-router/main/install.sh | sh
 ```
 
-Create the local environment file:
+That downloads the latest release, checks it against the checksum published
+beside it, and runs `vpnctl install`. It will ask for your password once, at
+that last step. The script is short and worth reading before you pipe it to a
+shell.
+
+Only Apple silicon is published. On an Intel Mac, or to run your own build:
 
 ```bash
-cp .env.example .env
+go build -trimpath -o vpnctl ./cmd/vpnctl
+sudo ./vpnctl install
 ```
 
-Set the Base32 TOTP setup secret in `.env`:
+`-trimpath` is not optional for anything you hand to someone else: without it Go
+records the absolute path of every source file in the binary, which on a normal
+machine puts your username in it a hundred times over.
 
-```dotenv
-TOTP_SECRET=YOUR_BASE32_SECRET
-SOCKS_PORT=1080
-RETRY_DELAY=5
-```
+Later, `sudo vpnctl update` fetches the newest release, verifies it, and hands
+over to its own installer — so an upgrade takes the same path a fresh install
+does, including a changed sing-box version or container definition.
+`vpnctl update -check` only looks.
 
-Protect local secrets:
+`install` asks for authorisation once, through `sudo` — which means a fingerprint
+if you have `pam_tid.so` in `/etc/pam.d/sudo_local`, and a password otherwise. It
+then:
+
+1. copies itself to `/usr/local/libexec/vpnctl/` and links `/usr/local/bin/vpnctl`
+2. installs a **root-owned** copy of sing-box, downloading the published
+   release and verifying it against the checksum pinned in `singbox.sha256`,
+   which ships pinned per platform. `-from-path` copies the one already on
+   your `PATH` instead — faster, and it reuses whatever verification your
+   package manager did, but the pin does not apply to it because a
+   distribution's build is a different binary. Homebrew's, for instance,
+   hashes differently because it builds from source.
+3. writes `~/.config/vpnctl/config.yaml` if you have none
+4. builds the VPN image from a build context embedded in the binary, and creates
+   the container
+5. installs a LaunchDaemon and starts it
+
+Nothing after that needs a password. The daemon is resident, so it comes back
+after a reboot before anyone logs in, and restarts from the CLI are immediate.
+
+Then put your VPN files in place and apply:
 
 ```bash
-chmod 600 .env auth.txt company.ovpn
+cp /path/to/profile.ovpn ~/.config/vpnctl/company.ovpn
+cp /path/to/auth.txt     ~/.config/vpnctl/auth.txt   # username on line 1, password on line 2
+printf 'TOTP_SECRET=YOUR_BASE32_SECRET\n' > ~/.config/vpnctl/.env
+chmod 600 ~/.config/vpnctl/{company.ovpn,auth.txt,.env}
+
+sudo vpnctl install        # recreates the container against the new files
+vpnctl doctor
 ```
 
-## 2. Start the VPN container
+### Coming from the older manual setup
+
+If you were running `host-dns-router` and `sing-box` by hand out of a checkout:
 
 ```bash
-docker compose up -d --build
+sudo vpnctl migrate /path/to/vpn-router
+sudo vpnctl install
 ```
 
-Check status and logs:
+`migrate` copies the profile, the auth file, `.env` and the force-VPN rules into
+`~/.config/vpnctl/` and repoints the config at them. It **copies**; your
+originals are left alone. After this the installation reads nothing from the
+checkout — `vpnctl doctor` verifies that under `independence`.
 
-```bash
-docker compose ps
-docker compose logs -f vpn
-```
+## Everyday use
 
-A healthy startup reaches:
+| Command | What it does |
+|---|---|
+| `vpnctl status` | what every component is doing; `-w` to follow |
+| `vpnctl logs` | one merged, tagged log; `-f` to follow, `-source vpn\|singbox\|dns\|racer\|supervisor` |
+| `vpnctl doctor` | check the installation and print the fix for anything wrong |
+| `sudo vpnctl update` | install the newest release; `-check` only reports |
+| `vpnctl reload` | apply an edited config, restarting only what changed |
+| `vpnctl resolver [on\|off <domain>]` | list scoped resolver domains, or switch one |
+| `vpnctl restart <component>` | `vpn`, `singbox`, `dns-router`, `racer`, or `all` |
+| `vpnctl retry` | leave safe mode after the breaker gave up on sing-box |
+
+None of these need `sudo`.
+
+There is also a menu bar item, installed by default and started at login. It
+shows the same status, restarts any component, applies an edited config, and
+opens the log page. Its **Quit menu bar** does exactly that and nothing else:
+the daemon and the tunnel keep running, which is why the item is not called
+"Quit". Quitting it is meant to stick, so bring it back with `vpnctl menubar
+-start` or by logging in again.
+
+Notifications appear only when the overall state *changes* — down, degraded,
+recovered — because one every ten seconds would teach you to ignore them.
+
+`reload` validates before it applies: the sing-box document is regenerated and
+checked by sing-box itself, and if it is rejected nothing is written and nothing
+restarts. It then restarts only the components whose settings changed — editing
+a racer timeout does not drop your tunnel. Only a change that reaches sing-box
+is disruptive, and `reload` says so when it is.
+
+## The log page
+
+**Open logs…** in the menu bar serves a live page: the component panel at the
+top, and one merged, filterable log below it, streamed over server-sent events.
+Filter by component or by text, pause the follow, and folded lines show their
+count rather than repeating.
+
+It is served by the menu bar process, as you, and not by the daemon. An HTTP
+listener has no way to tell one local caller from another, so putting one in a
+root service would hand every process on the machine a window into it. Run as
+you, the page can only show what you could already read through the control
+socket. The URL carries a random token as well, because a loopback listener is
+still reachable by every local process, including other users'.
+
+The listener starts when you first open the page and not before.
+
+## Configuration
+
+`~/.config/vpnctl/config.yaml`. Run `vpnctl config-example` for the annotated
+default; every value shown there is also the built-in default, so an omitted key
+never changes behaviour.
 
 ```text
-VPN tunnel is up (tun0)
-SOCKS5 listening on 0.0.0.0:1080
+~/.config/vpnctl/
+├── config.yaml            everything configurable
+├── company.ovpn           your OpenVPN profile          (600)
+├── auth.txt               username and password         (600)
+├── .env                   TOTP_SECRET                   (600)
+├── rules/force-vpn.json   domains and apps forced through the VPN
+└── run/vpn-dns            written by the container, read by the DNS router
 ```
 
-The host endpoint is:
+The two you are likely to touch:
 
-```text
-127.0.0.1:1080
+```yaml
+dns_router:
+  bind_interface: en0     # the physical interface direct traffic binds to
+
+singbox:
+  tun:
+    stack: gvisor         # gvisor | system — see below before changing
 ```
 
-Test it with a destination available through the VPN:
+### Forcing domains or applications through the VPN
 
-```bash
-curl --socks5-hostname 127.0.0.1:1080 https://internal.example.com
-```
-
-Use `--socks5-hostname` when hostname resolution must happen through the SOCKS path.
-
-## 3. Build and run the host router
-
-Build a stable binary:
-
-```bash
-cd host-dns-router
-go build -o host-dns-router .
-```
-
-Run it on macOS, replacing `en0` if the physical network interface differs:
-
-```bash
-./host-dns-router -bind-interface en0
-```
-
-Default endpoints:
-
-```text
-127.0.0.1:15353/udp  split-horizon DNS router
-127.0.0.1:15080/tcp  direct-vs-VPN SOCKS5 racer
-```
-
-The default Compose container name is `vpn-router-vpn-1`. Override it when the Compose project name differs:
-
-```bash
-./host-dns-router \
-  -bind-interface en0 \
-  -container your-project-vpn-1
-```
-
-Useful options:
-
-```text
--public-dns              public DNS upstream, default 1.1.1.1:53
--socks                   VPN SOCKS endpoint, default 127.0.0.1:1080
--dns-refresh-interval    interval for reading VPN-pushed DNS servers
--query-timeout           timeout for each DNS branch
--grace-window            wait for a private internal answer after public DNS wins
--dial-timeout             timeout for each TCP racer branch
-```
-
-## 4. Run sing-box
-
-Create the local force-VPN rule-set before validating or starting sing-box:
-
-```bash
-cp singbox/rules/force-vpn.json.example singbox/rules/force-vpn.json
-```
-
-Edit `singbox/rules/force-vpn.json` to force selected domains or macOS
-processes through the VPN. Keep domain and process matchers in separate rule
-objects: fields inside one rule are combined, while separate rules match
-independently.
+`~/.config/vpnctl/rules/force-vpn.json` is a sing-box source rule-set, reloaded
+automatically when it changes — no `vpnctl reload` needed.
 
 ```json
 {
   "version": 4,
   "rules": [
-    {
-      "domain": ["exact.customer.example"],
-      "domain_suffix": ["customer.example"]
-    },
-    {
-      "process_name": ["CustomerApp"]
-    },
-    {
-      "process_path_regex": [
-        "^/Applications/CustomerApp\\.app/Contents/.*"
-      ]
-    }
+    { "domain_suffix": ["customer.example"] },
+    { "process_name": ["CustomerApp"] },
+    { "process_path_regex": ["^/Applications/CustomerApp\\.app/Contents/.*"] }
   ]
 }
 ```
 
-`domain` matches exact hostnames. `domain_suffix` matches both the listed
-domain and its subdomains. Process rules include TCP and UDP, so matching apps
-fail closed instead of falling back to direct traffic when the VPN is down.
-The route configuration sniffs HTTP Host and TLS/QUIC SNI before applying this
-rule-set. This is required when a TUN connection arrives with only a destination
-IP and has no DNS reverse mapping available to the router.
-Delete an unused rule object entirely; an object such as
-`{"process_name": []}` is invalid and fails with `missing conditions`.
-The local rule file is ignored by Git; do not commit customer domains or local
-application details. sing-box 1.10 and newer automatically reload a local
-rule-set after the file changes.
+Keep domain and process matchers in **separate** rule objects: fields inside one
+object are ANDed, separate objects match independently. Delete an unused object
+entirely — `{"process_name": []}` is rejected with `missing conditions`. An empty
+`"rules": []` is valid and forces nothing.
 
-Validate the configuration:
+Matching is by HTTP `Host` and TLS/QUIC SNI, sniffed before the rule is applied,
+because a TUN connection arrives with only a destination address. Process rules
+cover TCP and UDP, so a matched application fails closed rather than falling back
+to direct when the VPN is down.
 
-```bash
-sing-box check -c singbox/config.json
-```
+### About `stack: system`
 
-Start it after the host router is listening:
+`gvisor` is a userspace network stack: slower, and the one this setup has been
+running. `system` is faster and has broken networking on the machine this was
+developed on. It is a knob so you can benchmark it, not a recommendation.
 
-```bash
-sudo sing-box run -c singbox/config.json
-```
+## Failure behaviour
 
-The process rule for `host-dns-router` is required. It prevents the router's direct connections from being captured by the TUN again.
+| What happens | Effect |
+|---|---|
+| VPN tunnel drops | Public traffic unaffected. Corporate DNS and private destinations fail, by design. Status goes yellow, not red. |
+| Container runtime absent (before login, or not installed) | Same as above. The daemon retries and creates the container when it appears. |
+| sing-box crashes | The TUN and its routes disappear with the process, and the machine falls back to its own routing. The daemon restarts it with backoff. |
+| sing-box crash-loops | After 5 failures in 60s the breaker stops trying and leaves the machine on native routing, because flapping the default route is worse than having no split routing. `vpnctl retry` resumes. |
+| The daemon is killed, however violently | sing-box goes down with it within about a second, and the machine keeps working. See below. |
+| Applications cannot reach the network but the interface can | The daemon concludes its own stack is the problem and takes it down rather than restarting it forever. |
+| Your machine is simply offline | Nothing is restarted. Churn would not help. |
 
-## 5. Optional macOS split resolver
+## How the pieces hold together
 
-To send only one internal DNS suffix to the host DNS router, create a scoped resolver. For example, for `*.corp.example.com`:
+Three properties are worth understanding before changing anything.
 
-```bash
-sudo mkdir -p /etc/resolver
-printf 'nameserver 127.0.0.1\nport 15353\n' | \
-  sudo tee /etc/resolver/corp.example.com >/dev/null
-sudo killall mDNSResponder
-```
+**sing-box must never outlive the DNS router and the racer.** It installs the
+routes that make every application depend on them, so a supervisor that died
+while sing-box kept running would leave the machine with routes pointing at a
+resolver and a proxy that no longer answer — every lookup and every connection
+failing, with the interface still up. Signals cannot solve this, because a
+SIGKILLed process runs no cleanup. A pipe can: `vpnctl singbox-shim` blocks
+reading a descriptor whose only writer is the daemon, so the kernel reports EOF
+the instant that process stops existing, and the shim stops sing-box.
 
-This does not replace Wi-Fi DNS globally. Only names ending in `.corp.example.com` use `127.0.0.1:15353`.
+**Health is measured as connectivity, not liveness.** Every component can be
+running while the machine is unusable, so three paths are compared: bound to the
+physical interface, through our own listeners on loopback, and an ordinary
+connection that follows the default route into the TUN. Only the last covers
+sing-box. Reachable directly but not the way an application goes means this stack
+is the problem, and the response is to shut it down, not to restart it harder.
 
-Inspect the active resolver:
-
-```bash
-scutil --dns
-```
-
-## Failure behavior
-
-### VPN available
-
-- VPN-pushed DNS servers are discovered from `/run/vpn-dns` in the container.
-- Internal DNS uses Dante UDP ASSOCIATE through `tun0`.
-- Private destinations use the VPN.
-- The TCP racer selects and remembers the first successful path.
-
-### VPN unavailable
-
-- Dante becomes unavailable and cannot leak through the container's direct interface.
-- Internal DNS and private destinations fail.
-- Public DNS continues through the host's direct interface.
-- The racer falls back to direct TCP.
-- Public Internet remains available while `host-dns-router` and sing-box stay running.
-
-If `host-dns-router` itself stops while sing-box is active, destinations routed to the racer can fail. Start the host router before sing-box.
+**The first route rule is load-bearing.** `process_name: [vpnctl]` routed direct,
+ahead of `hijack-dns`, is what stops the DNS router's own queries from being
+recaptured by the TUN and looping forever. A second layer binds those queries to
+the physical interface. Remove either and DNS stops working in a way that looks
+like a DNS problem.
 
 ## Debugging
 
-Inspect the container tunnel and kill-switch:
-
 ```bash
-docker compose exec vpn ip addr show tun0
-docker compose exec vpn ip route
-docker compose exec vpn iptables -S OUTPUT
+vpnctl doctor                      # start here
+vpnctl logs -f                     # everything, tagged by component
+vpnctl logs -source singbox        # one component
+sudo tail -f /usr/local/var/log/vpnctl/daemon.log
+
+vpnctl check                       # validate the config and the generated document
+vpnctl gen-singbox                 # print the document sing-box is given
+
+dig @127.0.0.1 -p 15353 example.com                                   # the resolver
+curl --socks5-hostname 127.0.0.1:15080 https://example.com             # the racer
+curl --socks5-hostname 127.0.0.1:1080 https://internal.example.com     # the tunnel
+
+netstat -rn -f inet | grep utun225 # the routes sing-box installed
+docker logs -f vpnctl-vpn          # the container, raw
 ```
 
-Test host DNS:
+Repeated log lines are folded with a count, so `(x40)` means the same event
+forty times rather than forty things going wrong.
 
-```bash
-dig @127.0.0.1 -p 15353 example.com
+### Where things live
+
+```text
+/usr/local/libexec/vpnctl/          vpnctl and sing-box, root-owned
+/usr/local/var/vpnctl/              generated sing-box config, pid files
+/usr/local/var/log/vpnctl/          daemon.log
+/usr/local/etc/vpnctl/install.json  who this installation belongs to
+/var/run/vpnctl.sock                control socket
+/Library/LaunchDaemons/vpnctl.plist
 ```
 
-Test the TCP racer:
+## Development
 
 ```bash
-curl --socks5-hostname 127.0.0.1:15080 https://example.com
+go build ./... && go vet ./... && go test ./...
+go build -o vpnctl ./cmd/vpnctl
 ```
 
-Run Go checks:
+```text
+cmd/vpnctl/          the CLI, one file per group of subcommands
+container/context/   the VPN image's build context, embedded in the binary
+internal/
+  config/            the YAML file, its defaults, and the executable-safety rule
+  dnsrouter/         split-horizon DNS
+  racer/             direct-vs-VPN TCP race
+  netmon/            the bind address, tracked through the routing socket
+  singbox/           config generation, the guard shim, process supervision
+  dockerctl/         a minimal Engine API client
+  vpnbox/            the image and the container specification
+  vpndns/            the VPN-pushed DNS servers
+  logbus/            merged, tagged, de-duplicated logs
+  health/            the three-way connectivity probe
+  status/            the vocabulary the daemon and the UI share
+  ipc/               the control socket protocol
+  ui/menubar/        the menu bar, and its drawn status icons
+  ui/web/            the live status and log page
+  supervisor/        orchestration, self-healing, reload
+  installer/         launchd, managed binaries, migration
+  doctor/            the checks and their fixes
+```
+
+`docker-compose.yml` is kept only for working on the image by hand. It is not
+used at runtime.
+
+`vpnctl run-router` runs just the resolver and the racer in the foreground,
+which is convenient while working on them. `vpnctl menubar` does the same for
+the menu bar; run it from a terminal and its state transitions go to stderr.
+
+**Changing the image** means editing `container/context/` and rebuilding
+`vpnctl`: the tag carries a hash of that directory, so the daemon cannot end up
+running an image that does not match the binary. Then `sudo vpnctl install`.
+
+### Releasing
+
+Push a tag and CI does the rest:
 
 ```bash
-cd host-dns-router
-go test ./...
-go vet ./...
+git tag v0.1.0 && git push origin v0.1.0
 ```
+
+The workflow builds with `-trimpath`, publishes the archive with a `SHA256SUMS`
+beside it, and refuses to release a binary that still contains build paths —
+because dropping `-trimpath` is an easy mistake and the result is somebody's
+username in a public artefact.
+
+CI runs on macOS, not by preference: the router binds a routing socket and the
+supervisor drives launchd, so the module does not compile anywhere else.
+
+`TestGeneratedMatchesCommitted` compares the generated sing-box document against
+`singbox/config.json`. If you change routing or DNS behaviour it will fail —
+that is the point. Update the committed file in the same commit and say why.
+
+### Platform behaviour worth knowing
+
+Verified on macOS 26 with OrbStack, and each one cost some time:
+
+- A container runtime only bind-mounts host paths its virtual machine shares. A
+  mount of a path under `/usr/local` **silently** resolves inside the runtime's
+  own VM: the container writes the file, the host never sees it, and nothing
+  reports an error. Shared paths live under `/Users`.
+- `docker compose` is a CLI plugin found through the invoking user's
+  `DOCKER_CONFIG`, so a root daemon cannot see it at all. `vpnctl` uses the
+  Engine API and never shells out to `docker`.
+- A `utun` interface belongs to the file descriptor that created it, so the
+  kernel destroys it — and the routes pointing at it — when the process dies.
+  Orphaned routes are not a failure mode here.
+- sing-box's `strict_route` does not use `pf` on macOS, and `auto_route` does not
+  touch `scutil` DNS. There is no firewall or resolver state to clean up.
+- A LaunchDaemon runs with no `HOME`, no `USER`, and `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
+- TCC does not block a LaunchDaemon from reading `~/Downloads`.
+
+## Scoped resolvers
+
+Naming a suffix here tells macOS to resolve it here, by way of a file in
+`/etc/resolver`:
+
+```yaml
+dns_router:
+  resolver_domains:
+    - corp.example.com
+    - domain: staging.example.com
+      enabled: false
+```
+
+A bare name is on. Write the mapping form to keep a suffix declared but
+switched off. Three ways to change it, all equivalent: edit the file and
+`vpnctl reload`, run `vpnctl resolver off corp.example.com`, or tick the
+checkbox in the menu bar. `vpnctl doctor` reports the result, and `scutil --dns`
+shows the system's own view.
+
+Off removes the resolver file rather than marking it inactive, because while
+the file exists the system resolver sends those names here — so anything less
+would make "off" untrue.
+
+The menu bar edits the config file itself and then asks the daemon to reload.
+Only that one block is rewritten, line by line, so the comments in your config
+survive a graphical toggle. What the menu shows is intent *and* effect
+separately: a suffix can be on with no file installed, or off with a file
+someone else wrote still in place, and a tick alone would imply those never
+disagree.
+
+While sing-box is running its TUN already captures every port-53 packet, so
+this is not about routing. What it adds is a statement that does not depend on
+the tunnel: these names are answered *here*, per suffix, so an internal name is
+never asked of a public resolver — not even briefly, and not if something
+bypasses the TUN.
+
+Two consequences are deliberate. The files outlive the daemon: with nothing
+listening, those names fail rather than fall back to a public resolver, which is
+the same fail-closed choice this project makes for corporate traffic.
+`vpnctl uninstall` removes them, and so does deleting the line and reloading.
+And a resolver file somebody wrote by hand for the same suffix is left alone
+unless it already points at the same place — silently redirecting where a
+machine sends its DNS is not a decision this program gets to make. `vpnctl
+doctor` reports either case.
 
 ## OTP prompt compatibility
 
-`vpn.exp` recognizes common challenge strings including OTP, verification code, one-time password, token, and challenge prompts containing OTP/token/code.
+`container/context/vpn.exp` recognises common challenge strings: OTP,
+verification code, one-time password, token, and challenge prompts containing
+OTP/token/code. If your provider words it differently, inspect the non-secret
+part of the OpenVPN log and adjust the regular expression.
 
-If a provider uses a different prompt, inspect the non-secret portions of the OpenVPN logs and adjust the regular expression. Never post a TOTP setup secret, generated OTP, auth file, or VPN profile in logs or issue trackers.
+Never post a TOTP secret, a generated code, an auth file, or a VPN profile
+anywhere.
+
+## Uninstall
+
+```bash
+sudo vpnctl uninstall
+```
+
+Removes the launchd job and the managed binaries. Your config, your secrets and
+the container are left alone.
 
 ## License
 

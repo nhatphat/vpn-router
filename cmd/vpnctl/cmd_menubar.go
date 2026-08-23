@@ -30,6 +30,7 @@ func menubarCmd(args []string) error {
 		SocketPath: *socketPath,
 		WebListen:  *webListen,
 		ConfigPath: *configPath,
+		Version:    version,
 	}
 
 	// The menu bar runs as the user and holds no configuration of its own, so

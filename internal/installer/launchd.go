@@ -67,11 +67,16 @@ func daemonPlist(configPath string) string {
 // agentPlist is the per-user LaunchAgent for the menu bar. The menu bar needs a
 // GUI session, which is why it cannot be part of the daemon.
 //
+// Its output is captured to a file in the user's own Library, because the menu
+// bar does report things — a daemon it cannot reach, an update check that
+// failed — that are worth reading afterwards and are worth nobody's
+// notification at the time.
+//
 // KeepAlive is conditional on the process having crashed, unlike the daemon's.
 // The menu bar has a Quit item, and an unconditional KeepAlive would put the
 // icon straight back — making the item look broken. A crash still brings it
 // back, which is what KeepAlive is for.
-func agentPlist() string {
+func agentPlist(logPath string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -88,9 +93,11 @@ func agentPlist() string {
     <key>SuccessfulExit</key><false/>
   </dict>
   <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, AgentLabel, BinaryPath)
+`, AgentLabel, BinaryPath, logPath, logPath)
 }
 
 // writeFileAs writes content and sets ownership, creating parents. launchd

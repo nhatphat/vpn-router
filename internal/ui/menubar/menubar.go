@@ -28,6 +28,8 @@ type Options struct {
 	SocketPath string
 	WebListen  string
 	ConfigPath string
+	// Version is what is running, for the update check to compare against.
+	Version string
 }
 
 type app struct {
@@ -41,6 +43,7 @@ type app struct {
 	order      []string
 	retry      *systray.MenuItem
 	stopStart  *systray.MenuItem
+	update     *systray.MenuItem
 
 	// resolverRoot holds a fixed pool of checkboxes. systray can hide and
 	// show items but not create them after the menu is built, so the pool is
@@ -48,6 +51,8 @@ type app struct {
 	resolverRoot  *systray.MenuItem
 	resolverItems []*systray.MenuItem
 	resolverEmpty *systray.MenuItem
+
+	updates *updateWatcher
 
 	mu         sync.Mutex
 	lastSeen   status.Overall
@@ -73,6 +78,7 @@ func Run(o Options) error {
 		lastSeen: "",
 	}
 	a.web = &web.Server{Addr: o.WebListen, Client: a.client}
+	a.updates = &updateWatcher{Version: o.Version, Logf: logf}
 
 	systray.Run(a.onReady, func() {})
 	return nil
@@ -126,6 +132,12 @@ func (a *app) onReady() {
 	openConfig := systray.AddMenuItem("Open config…", "")
 	runDoctor := systray.AddMenuItem("Run doctor…", "")
 
+	// Always on screen, and disabled until there is something to click. It
+	// answers "am I on the current version" as well as "is there a new one",
+	// and the first question is the one people actually open a menu to ask.
+	a.update = systray.AddMenuItem("Checking for updates…", "")
+	a.update.Disable()
+
 	systray.AddSeparator()
 	// Named explicitly: quitting this does not stop the stack, and a menu
 	// item called "Quit" would reasonably be read as doing so.
@@ -142,7 +154,13 @@ func (a *app) onReady() {
 	go a.onClick(openLogs, a.openLogs)
 	go a.onClick(openConfig, a.openConfig)
 	go a.onClick(runDoctor, a.runDoctor)
+	go a.onClick(a.update, a.runUpdate)
 	go a.onClick(quit, systray.Quit)
+
+	// Asking on open, rather than on a timer, ties the one piece of outbound
+	// traffic this process makes to somebody actually looking at the menu. A
+	// laptop whose owner never opens it never asks.
+	watchMenuOpen(a.checkForUpdate)
 
 	go a.followStatus()
 }
@@ -452,6 +470,49 @@ func (a *app) openConfig() {
 	}
 	// -t opens in the default text editor rather than whatever claims .yaml.
 	_ = exec.Command("/usr/bin/open", "-t", path).Start()
+}
+
+// checkForUpdate runs on every menu open; the watcher decides whether that
+// actually means asking GitHub.
+func (a *app) checkForUpdate() {
+	a.updates.MenuOpened(a.showVersion)
+}
+
+// showVersion writes the answer into the one item that carries it.
+//
+// A failed check says so rather than falling back to "up to date": the two
+// look identical from here, and only one of them is a statement about the
+// version you are running.
+func (a *app) showVersion(st updateStatus) {
+	switch {
+	case st.Newer != "":
+		a.update.SetTitle("Update: " + st.Current + " → " + st.Newer)
+		a.update.SetTooltip("Opens Terminal and runs: sudo vpnctl update")
+		a.update.Enable()
+	case st.Failed:
+		a.update.SetTitle(st.Current + " — could not check for updates")
+		a.update.SetTooltip("")
+		a.update.Disable()
+	default:
+		a.update.SetTitle("Up to date: " + st.Current)
+		a.update.SetTooltip("")
+		a.update.Disable()
+	}
+}
+
+// runUpdate hands over to the command line rather than doing it here.
+//
+// Updating replaces a root-owned binary and reloads a LaunchDaemon, which this
+// process has no business doing: it runs as the user, deliberately. Terminal
+// gets the machine's own sudo prompt, and the output — download, checksum,
+// reinstall — is worth seeing rather than compressing into a notification that
+// says "done".
+func (a *app) runUpdate() {
+	script := `tell application "Terminal"
+	activate
+	do script "sudo vpnctl update"
+end tell`
+	_ = exec.Command("/usr/bin/osascript", "-e", script).Start()
 }
 
 // runDoctor opens the checks in a terminal, because the answer is a page of

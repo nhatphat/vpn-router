@@ -178,7 +178,15 @@ func Install(o Options) error {
 	o.logf("wrote %s", DaemonPlist)
 
 	if o.WithMenuBar {
-		if err := writeFileAs(target.AgentPlist(), agentPlist(), target.UID, target.GID, 0o644); err != nil {
+		// launchd creates the log file but not the directory above it, and a
+		// missing StandardErrorPath is a job that will not start.
+		logDir := filepath.Dir(target.AgentLog())
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", logDir, err)
+		}
+		_ = os.Chown(logDir, target.UID, target.GID)
+
+		if err := writeFileAs(target.AgentPlist(), agentPlist(target.AgentLog()), target.UID, target.GID, 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", target.AgentPlist(), err)
 		}
 		o.logf("wrote %s", target.AgentPlist())
@@ -534,6 +542,11 @@ func Uninstall(o Options) error {
 	if o.Purge {
 		if err := os.RemoveAll(LogDir); err == nil {
 			o.logf("removed %s", LogDir)
+		}
+		if targetErr == nil {
+			if err := os.Remove(target.AgentLog()); err == nil {
+				o.logf("removed %s", target.AgentLog())
+			}
 		}
 	} else {
 		o.logf("kept %s for post-mortems, and your config, VPN profile and credentials", LogDir)

@@ -99,6 +99,15 @@ func (t *Target) AgentPlist() string {
 	return filepath.Join(t.HomeDir, "Library", "LaunchAgents", AgentLabel+".plist")
 }
 
+// AgentLog is where the menu bar's own output goes.
+//
+// Not beside the daemon's log: that directory is root-owned, and the menu bar
+// runs as the user, so launchd could not create the file there. ~/Library/Logs
+// is where a user agent's log belongs anyway — Console.app lists it.
+func (t *Target) AgentLog() string {
+	return filepath.Join(t.HomeDir, "Library", "Logs", "vpnctl-menubar.log")
+}
+
 // DefaultConfigPath mirrors config.DefaultPath but for another user's home,
 // which is what an installer running as root needs.
 func (t *Target) DefaultConfigPath() string {

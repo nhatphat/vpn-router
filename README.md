@@ -118,6 +118,19 @@ over to its own installer — so an upgrade takes the same path a fresh install
 does, including a changed sing-box version or container definition.
 `vpnctl update -check` only looks.
 
+The menu bar looks too, and offers the update as an item when there is one. It
+asks GitHub when you open the menu rather than on a timer, so the one piece of
+outbound traffic this program makes on its own is tied to somebody actually
+looking, and a laptop whose owner never opens the menu never asks. At most once
+an hour: sixty unauthenticated requests an hour is what GitHub allows per source
+address, and behind an office NAT that hour belongs to every machine on it.
+When there is nothing to install the item says so, naming the version you are
+on; a check that could not be made says that instead of claiming to be current.
+Nobody opens a menu in order to be told api.github.com was unreachable, so
+there is no notification, but the reason is in `~/Library/Logs/vpnctl-menubar.log`. Clicking the item opens Terminal and
+runs `sudo vpnctl update`, because replacing a root-owned binary is not
+something a process running as you should be doing quietly.
+
 `install` asks for authorisation once, through `sudo` — which means a fingerprint
 if you have `pam_tid.so` in `/etc/pam.d/sudo_local`, and a password otherwise. It
 then:

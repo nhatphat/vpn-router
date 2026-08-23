@@ -264,3 +264,34 @@ func TestALocalBuildIsOfferedARelease(t *testing.T) {
 		t.Fatalf("current = %q, want it left alone rather than turned into vdev", got.Current)
 	}
 }
+
+// TestApplescriptStringSurvivesTheTextItHasToCarry. The dialog exists to show
+// a failure, and the failures worth a dialog are the ones with a checksum
+// mismatch in them: several lines, quotes around filenames. Escaped wrong,
+// the message a person needs becomes an AppleScript syntax error instead.
+func TestApplescriptStringSurvivesTheTextItHasToCarry(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`plain`, `"plain"`},
+		{`he said "no"`, `"he said \"no\""`},
+		{`a\b`, `"a\\b"`},
+		{"two\nlines", `"two" & return & "lines"`},
+		{"crlf\r\nhere", `"crlf" & return & "here"`},
+	}
+	for _, c := range cases {
+		if got := applescriptString(c.in); got != c.want {
+			t.Errorf("applescriptString(%q) = %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
+// TestCancellingTheDialogIsNotAFailure: osascript reports a dismissed
+// authorisation prompt as an error like any other, and telling somebody their
+// update failed because they decided not to update would be nonsense.
+func TestCancellingTheDialogIsNotAFailure(t *testing.T) {
+	if !cancelled([]byte("0:54: execution error: User canceled. (-128)")) {
+		t.Error("a dismissed prompt was treated as a failure")
+	}
+	if cancelled([]byte("checksum mismatch for vpnctl_0.4.0_darwin_arm64.tar.gz")) {
+		t.Error("a checksum mismatch was mistaken for someone pressing Cancel")
+	}
+}

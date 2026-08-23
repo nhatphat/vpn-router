@@ -54,10 +54,11 @@ type app struct {
 
 	updates *updateWatcher
 
-	mu         sync.Mutex
-	lastSeen   status.Overall
-	lastPaused bool
-	resolvers  []status.Resolver
+	mu          sync.Mutex
+	updateTitle string
+	lastSeen    status.Overall
+	lastPaused  bool
+	resolvers   []status.Resolver
 }
 
 // maxResolverItems bounds the checkbox pool. A machine with more scoped
@@ -486,32 +487,95 @@ func (a *app) checkForUpdate() {
 func (a *app) showVersion(st updateStatus) {
 	switch {
 	case st.Newer != "":
-		a.update.SetTitle("Update: " + st.Current + " → " + st.Newer)
-		a.update.SetTooltip("Opens Terminal and runs: sudo vpnctl update")
-		a.update.Enable()
+		title := "Update: " + st.Current + " → " + st.Newer
+		a.setUpdateItem(title, "Downloads, verifies and installs it; macOS will ask for your password", true)
 	case st.Failed:
-		a.update.SetTitle(st.Current + " — could not check for updates")
-		a.update.SetTooltip("")
-		a.update.Disable()
+		a.setUpdateItem(st.Current+" — could not check for updates", "", false)
 	default:
-		a.update.SetTitle("Up to date: " + st.Current)
-		a.update.SetTooltip("")
+		a.setUpdateItem("Up to date: "+st.Current, "", false)
+	}
+}
+
+// setUpdateItem remembers the title as well as showing it, because the click
+// handler replaces it with "Updating…" and has to put something back if the
+// authorisation dialog is dismissed.
+func (a *app) setUpdateItem(title, tooltip string, clickable bool) {
+	a.mu.Lock()
+	a.updateTitle = title
+	a.mu.Unlock()
+
+	a.update.SetTitle(title)
+	a.update.SetTooltip(tooltip)
+	if clickable {
+		a.update.Enable()
+	} else {
 		a.update.Disable()
 	}
 }
 
-// runUpdate hands over to the command line rather than doing it here.
+// runUpdate asks for authorisation and installs, without a terminal.
 //
 // Updating replaces a root-owned binary and reloads a LaunchDaemon, which this
-// process has no business doing: it runs as the user, deliberately. Terminal
-// gets the machine's own sudo prompt, and the output — download, checksum,
-// reinstall — is worth seeing rather than compressing into a notification that
-// says "done".
+// process cannot do: it runs as the user, deliberately. So it asks the system
+// to run one command as root, which puts the machine's own authorisation
+// dialog in front of it. That prompt is the point — it is a person agreeing to
+// replace a root-owned binary, and the alternative, letting the resident
+// daemon install whatever it downloads, would let anything running under this
+// account do the same without anybody being asked.
+//
+// The command names the binary in libexec rather than the /usr/local/bin
+// symlink. Both are root-owned here, but /usr/local/bin is a directory that
+// installers and package managers make writable on many machines, and handing
+// a user-writable path to something that runs as root is how a convenience
+// becomes an escalation.
 func (a *app) runUpdate() {
-	script := `tell application "Terminal"
-	activate
-	do script "sudo vpnctl update"
-end tell`
+	a.mu.Lock()
+	previous := a.updateTitle
+	a.mu.Unlock()
+
+	a.update.SetTitle("Updating…")
+	a.update.Disable()
+
+	// -detach because installing unloads this very launchd job; see
+	// detachInstall. Everything that can go wrong first — GitHub, the
+	// checksum — has already failed by the time this returns, and comes back
+	// here as the error text.
+	script := `do shell script "` + installer.BinaryPath + ` update -detach" with administrator privileges`
+	out, err := exec.Command("/usr/bin/osascript", "-e", script).CombinedOutput()
+
+	switch {
+	case err == nil:
+		notify("Updating", "the menu bar restarts when it is done")
+		return
+	case cancelled(out):
+		// Not a failure, and not worth a word.
+	default:
+		// A dialog rather than a notification: this is a wall of text with
+		// the reason in it, and a notification would show the first line of
+		// a checksum mismatch and drop the rest.
+		alert("vpnctl could not update", strings.TrimSpace(string(out)))
+	}
+
+	a.update.SetTitle(previous)
+	a.update.Enable()
+}
+
+// cancelled recognises the one failure that is a decision. osascript reports a
+// dismissed authorisation dialog as an error like any other, and telling
+// somebody their update failed because they chose not to do it would be
+// nonsense.
+func cancelled(out []byte) bool {
+	return strings.Contains(string(out), "User canceled") ||
+		strings.Contains(string(out), "-128")
+}
+
+// alert shows a dialog, for the messages worth reading rather than glancing at.
+func alert(title, message string) {
+	if message == "" {
+		message = "no reason given"
+	}
+	script := fmt.Sprintf("display dialog %s with title %s with icon caution buttons {\"OK\"} default button \"OK\"",
+		applescriptString(message), applescriptString(title))
 	_ = exec.Command("/usr/bin/osascript", "-e", script).Start()
 }
 
@@ -533,16 +597,32 @@ func open(url string) {
 // fixed path, unlike the tools this project deliberately refuses to shell out
 // to.
 func notify(title, message string) {
-	quote := func(s string) string {
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `"`, `\"`)
+	// Truncated here rather than in applescriptString: a notification has
+	// room for a line, while a dialog is where the whole of a message goes.
+	clip := func(s string) string {
 		if len(s) > 200 {
-			s = s[:197] + "…"
+			return s[:197] + "…"
 		}
-		return `"` + s + `"`
+		return s
 	}
 
 	script := fmt.Sprintf("display notification %s with title %s",
-		quote(message), quote("vpnctl — "+title))
+		applescriptString(clip(message)), applescriptString(clip("vpnctl — "+title)))
 	_ = exec.Command("/usr/bin/osascript", "-e", script).Start()
+}
+
+// applescriptString renders a Go string as an AppleScript literal.
+//
+// Everything passed through here is either a constant or text osascript
+// itself produced, but it reaches a shell-adjacent interpreter, and an
+// unescaped quote in an error message is the kind of thing that turns a
+// diagnostic into a syntax error at exactly the moment somebody needs to
+// read it.
+func applescriptString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	// AppleScript string literals cannot contain a raw newline.
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\n", `" & return & "`)
+	return `"` + s + `"`
 }

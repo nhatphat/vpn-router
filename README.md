@@ -127,9 +127,20 @@ address, and behind an office NAT that hour belongs to every machine on it.
 When there is nothing to install the item says so, naming the version you are
 on; a check that could not be made says that instead of claiming to be current.
 Nobody opens a menu in order to be told api.github.com was unreachable, so
-there is no notification, but the reason is in `~/Library/Logs/vpnctl-menubar.log`. Clicking the item opens Terminal and
-runs `sudo vpnctl update`, because replacing a root-owned binary is not
-something a process running as you should be doing quietly.
+there is no notification, but the reason is in `~/Library/Logs/vpnctl-menubar.log`. Clicking it asks macOS to run the update as
+root, which puts the system's own authorisation dialog in front of it. That
+prompt is the point: replacing a root-owned binary is not something a process
+running as you should do quietly, and the alternative — letting the resident
+daemon install whatever it downloads — would let anything running under your
+account do the same without anyone being asked.
+
+Only the install step runs detached. Reaching GitHub, checking the signature
+and staging the binary all happen first and report their own errors, in a
+dialog you can read. What is left has to leave the job it was started from:
+installing reloads both launchd jobs, and unloading one takes down every
+process in it, including the menu bar that started the update. So the handover
+runs in a session of its own — measured rather than assumed — and the menu bar
+comes back on the new version a moment later.
 
 `install` asks for authorisation once, through `sudo` — which means a fingerprint
 if you have `pam_tid.so` in `/etc/pam.d/sudo_local`, and a password otherwise. It

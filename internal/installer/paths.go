@@ -47,8 +47,6 @@ const (
 	// makes the daemon willing to execute it.
 	SingBoxPath = LibexecDir + "/sing-box"
 
-	InstallRecord = EtcDir + "/install.json"
-
 	// SymlinkPath puts vpnctl on the default PATH, so "vpnctl status" works
 	// without anyone having to remember where the binary lives.
 	SymlinkPath = "/usr/local/bin/vpnctl"
@@ -58,6 +56,11 @@ const (
 	// the real copy is in place.
 	UpdateStagingName = "vpnctl.update"
 )
+
+// InstallRecord names the file recording who an installation belongs to. A
+// variable rather than a constant only so a test can put it somewhere
+// writable; nothing sets it at runtime.
+var InstallRecord = EtcDir + "/install.json"
 
 // Target describes who the installation is for. The daemon runs as root but
 // belongs to one login user: their config file, their group on the control
@@ -69,10 +72,23 @@ type Target struct {
 	HomeDir string
 }
 
-// ResolveTarget identifies the invoking user behind sudo. Installing "for
-// root" is refused, because the config and the menu bar belong to a person.
+// ResolveTarget identifies the person an installation belongs to. Installing
+// "for root" is refused, because the config and the menu bar belong to
+// somebody who logs in.
+//
+// SUDO_USER first, because that is who is actually running this. Failing that,
+// the record a previous install left: root can arrive here without sudo — from
+// an authorisation dialog, a root shell, a launchd job — and on a machine that
+// already has vpnctl, the person it was installed for is not in doubt. Only a
+// first install on such a path has nothing to go on, and that is the case the
+// error is about.
 func ResolveTarget() (*Target, error) {
 	name := os.Getenv("SUDO_USER")
+	if name == "" || name == "root" {
+		if rec, err := LoadRecord(); err == nil {
+			name = rec.User
+		}
+	}
 	if name == "" || name == "root" {
 		return nil, fmt.Errorf("cannot tell which user to install for: run this through sudo, as\n  sudo vpnctl install")
 	}

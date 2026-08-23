@@ -20,8 +20,8 @@ const usage = `vpnctl - split-routing supervisor for macOS
 
 Usage:
   vpnctl install [flags]      set it up once as a launchd daemon (root)
-  vpnctl stop                 stop the stack without removing anything (root)
-  vpnctl start                start it again (root)
+  vpnctl stop                 switch the stack off, removing nothing
+  vpnctl start                switch it back on
   vpnctl update [-check]      install the latest published release (root)
   vpnctl uninstall [-purge]   remove what install added; -purge drops the container too
   vpnctl setup                point it at your .ovpn profile and credentials

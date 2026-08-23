@@ -188,18 +188,27 @@ checkout — `vpnctl doctor` verifies that under `independence`.
 | `vpnctl resolver [on\|off <domain>]` | list scoped resolver domains, or switch one |
 | `vpnctl restart <component>` | `vpn`, `singbox`, `dns-router`, `racer`, or `all` |
 | `vpnctl retry` | leave safe mode after the breaker gave up on sing-box |
-| `sudo vpnctl stop` / `start` | put the whole stack down and back up, removing nothing |
+| `vpnctl stop` / `start` | switch the whole stack off and on, removing nothing |
 
-All but the last need no `sudo`.
+None of these need `sudo`.
 
 `stop` is there because wanting the machine's own routing back for an hour is
-an ordinary thing to want, and uninstalling to get it is far too much. It
-unloads the daemon — which takes sing-box and the TUN with it — stops the menu
-bar and the VPN container, and removes nothing. `start` puts it all back.
+an ordinary thing to want, and uninstalling to get it is far too much. The
+daemon keeps running and takes everything else down — sing-box, the TUN, the
+resolver, the racer, the VPN container — so the machine routes its own traffic
+again and nothing is removed. Because the daemon stays up, `start` needs no
+password either, which is what lets the menu bar offer both with one click.
+
+A stop is remembered: a reboot does not quietly turn routing back on. If the
+daemon itself is wedged and cannot be asked, `stop` falls back to unloading its
+launchd job, and that does need root.
 
 There is also a menu bar item, installed by default and started at login. It
-shows the same status, restarts any component, applies an edited config, and
-opens the log page. Its **Quit menu bar** does exactly that and nothing else:
+shows the state as a short coloured word — `VPN OK`, `VPN !`, `VPN X`,
+`VPN OFF` — rather than a coloured dot, because a dot needs a legend and amber
+against grey is not a distinction to rely on at a glance. It stops and starts
+the stack, restarts any component, applies an edited config, and opens the log
+page. Its **Quit menu bar** does exactly that and nothing else:
 the daemon and the tunnel keep running, which is why the item is not called
 "Quit". Quitting it is meant to stick, so bring it back with `vpnctl menubar
 -start` or by logging in again.

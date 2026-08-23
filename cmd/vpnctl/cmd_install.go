@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"vpn-router/internal/installer"
+	"vpn-router/internal/ipc"
 )
 
 // --- install / uninstall ---
@@ -58,13 +59,29 @@ func installCmd(args []string) error {
 	return nil
 }
 
+// stopCmd and startCmd switch the stack off and on.
+//
+// They ask the daemon first, which needs no privilege: it keeps running and
+// takes everything else down, so the machine routes its own traffic and the
+// menu bar can turn it back on with a click. Only when the daemon cannot be
+// reached do they fall back to unloading the launchd job, which does need
+// root — that is the case where something is wedged rather than merely on.
 func stopCmd(args []string) error {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
+	socketPath := fs.String("socket", ipc.DefaultSocket, "control socket path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	fmt.Println("Stopping vpnctl:")
+	if _, err := client(*socketPath).Do(ipc.Request{Op: ipc.OpPause}); err == nil {
+		fmt.Println("Stopped. The machine is routing its own traffic again.")
+		fmt.Println("Nothing was removed; the daemon is still there to turn it back on.")
+		fmt.Println()
+		fmt.Println("Start it again with:  vpnctl start")
+		return nil
+	}
+
+	fmt.Println("The daemon is not answering, so unloading it instead:")
 	return installer.Stop(installer.Options{
 		Logf: func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
 	})
@@ -72,11 +89,17 @@ func stopCmd(args []string) error {
 
 func startCmd(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
+	socketPath := fs.String("socket", ipc.DefaultSocket, "control socket path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	fmt.Println("Starting vpnctl:")
+	if _, err := client(*socketPath).Do(ipc.Request{Op: ipc.OpResume}); err == nil {
+		fmt.Println("Started. Watch it come up with:  vpnctl status -w")
+		return nil
+	}
+
+	fmt.Println("The daemon is not answering, so loading it instead:")
 	if err := installer.Start(installer.Options{
 		Logf: func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
 	}); err != nil {

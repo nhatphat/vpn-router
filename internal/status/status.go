@@ -76,6 +76,10 @@ type Snapshot struct {
 	Reason     string      `json:"reason"`
 	Components []Component `json:"components"`
 	Resolvers  []Resolver  `json:"resolvers,omitempty"`
+	// Paused means the stack was switched off deliberately. It is not a
+	// failure, and a display that showed it as one would send people looking
+	// for a fault they caused.
+	Paused bool `json:"paused"`
 	// Generation increments whenever the network path underneath the stack
 	// changed (VPN restarted, tunnel flapped, interface address changed,
 	// VPN-pushed DNS servers changed).
@@ -91,6 +95,21 @@ type Snapshot struct {
 // layer is gone, while the VPN being down is only yellow, since public
 // traffic keeps working and VPN traffic is meant to fail closed.
 func Aggregate(comps []Component) (Overall, string) {
+	return aggregate(comps, false)
+}
+
+// AggregatePaused reports the state of a stack that was switched off on
+// purpose. It is deliberately not an error: showing a fault for something
+// somebody chose sends them looking for a problem they created.
+func AggregatePaused() (Overall, string) {
+	return OverallYellow, "paused — run \"vpnctl start\" to route traffic again"
+}
+
+func aggregate(comps []Component, paused bool) (Overall, string) {
+	if paused {
+		return AggregatePaused()
+	}
+
 	byName := make(map[string]Component, len(comps))
 	for _, c := range comps {
 		byName[c.Name] = c

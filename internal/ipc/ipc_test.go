@@ -17,6 +17,7 @@ type stubBackend struct {
 	restarted []string
 	retried   int
 	reloaded  int
+	paused    bool
 	bus       *logbus.Bus
 	statusCh  chan status.Snapshot
 }
@@ -62,6 +63,13 @@ func (b *stubBackend) Reload() (*status.ReloadResult, error) {
 	defer b.mu.Unlock()
 	b.reloaded++
 	return &status.ReloadResult{ConfigPath: "/tmp/config.yaml", Restarted: []string{status.CompSingBox}, Disruptive: true}, nil
+}
+
+func (b *stubBackend) SetPaused(paused bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.paused = paused
+	return nil
 }
 
 func (b *stubBackend) Version() string { return "test" }

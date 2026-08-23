@@ -40,6 +40,7 @@ type app struct {
 	components map[string]*systray.MenuItem
 	order      []string
 	retry      *systray.MenuItem
+	stopStart  *systray.MenuItem
 
 	// resolverRoot holds a fixed pool of checkboxes. systray can hide and
 	// show items but not create them after the menu is built, so the pool is
@@ -48,9 +49,10 @@ type app struct {
 	resolverItems []*systray.MenuItem
 	resolverEmpty *systray.MenuItem
 
-	mu        sync.Mutex
-	lastSeen  status.Overall
-	resolvers []status.Resolver
+	mu         sync.Mutex
+	lastSeen   status.Overall
+	lastPaused bool
+	resolvers  []status.Resolver
 }
 
 // maxResolverItems bounds the checkbox pool. A machine with more scoped
@@ -110,6 +112,11 @@ func (a *app) onReady() {
 		}(i))
 	}
 
+	// Above the rest: it is the item somebody reaches for when something is
+	// wrong and they want their own network back now.
+	a.stopStart = systray.AddMenuItem("Stop", "")
+	systray.AddSeparator()
+
 	apply := systray.AddMenuItem("Apply config", "Re-read the config file and restart only what changed")
 	a.retry = systray.AddMenuItem("Try again", "Leave safe mode and start sing-box again")
 	a.retry.Hide()
@@ -129,6 +136,7 @@ func (a *app) onReady() {
 			return func() { a.restart(component) }
 		}(name))
 	}
+	go a.onClick(a.stopStart, a.toggleStopped)
 	go a.onClick(apply, a.applyConfig)
 	go a.onClick(a.retry, a.retryNow)
 	go a.onClick(openLogs, a.openLogs)
@@ -185,16 +193,26 @@ func logf(format string, args ...any) {
 
 func (a *app) apply(snap *status.Snapshot) {
 	icon := iconUnknown
-	switch snap.Overall {
-	case status.OverallGreen:
-		icon = iconGreen
-	case status.OverallYellow:
-		icon = iconYellow
-	case status.OverallRed:
-		icon = iconRed
+	switch {
+	case snap.Paused:
+		icon = iconPaused
+	case snap.Overall == status.OverallGreen:
+		icon = iconOK
+	case snap.Overall == status.OverallYellow:
+		icon = iconWarn
+	case snap.Overall == status.OverallRed:
+		icon = iconError
 	}
 	systray.SetIcon(icon)
 	systray.SetTooltip("vpnctl — " + snap.Reason)
+
+	if snap.Paused {
+		a.stopStart.SetTitle("Start")
+		a.stopStart.SetTooltip("Route traffic through the VPN stack again")
+	} else {
+		a.stopStart.SetTitle("Stop")
+		a.stopStart.SetTooltip("Hand routing back to the machine, without removing anything")
+	}
 
 	a.header.SetTitle(snap.Reason)
 
@@ -221,6 +239,10 @@ func (a *app) apply(snap *status.Snapshot) {
 	} else {
 		a.retry.Hide()
 	}
+
+	a.mu.Lock()
+	a.lastPaused = snap.Paused
+	a.mu.Unlock()
 
 	a.applyResolvers(snap.Resolvers)
 
@@ -361,6 +383,34 @@ func (a *app) retryNow() {
 		return
 	}
 	notify("Leaving safe mode", "starting sing-box again")
+}
+
+// toggleStopped switches the stack off or on.
+//
+// It goes through the daemon rather than launchd: the daemon keeps running and
+// takes everything else down, which is what lets this work from a menu bar
+// running as the user, with no password. The state is remembered, so it stays
+// off across a reboot until somebody turns it back on.
+func (a *app) toggleStopped() {
+	a.mu.Lock()
+	paused := a.lastPaused
+	a.mu.Unlock()
+
+	op := ipc.OpPause
+	if paused {
+		op = ipc.OpResume
+	}
+
+	if _, err := a.client.Do(ipc.Request{Op: op}); err != nil {
+		notify("Could not change state", err.Error())
+		return
+	}
+
+	if paused {
+		notify("Started", "routing through the VPN stack again")
+	} else {
+		notify("Stopped", "the machine is routing its own traffic; nothing was removed")
+	}
 }
 
 func (a *app) applyConfig() {

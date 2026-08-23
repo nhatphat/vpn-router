@@ -43,6 +43,8 @@ const (
 	OpRestart      Op = "restart"
 	OpRetry        Op = "retry"
 	OpReload       Op = "reload"
+	OpPause        Op = "pause"
+	OpResume       Op = "resume"
 	OpVersion      Op = "version"
 )
 
@@ -76,6 +78,7 @@ type Backend interface {
 	Restart(component string) error
 	Retry()
 	Reload() (*status.ReloadResult, error)
+	SetPaused(paused bool) error
 	Logs(since uint64, source logbus.Source) []logbus.Entry
 	SubscribeLogs(buffer int) (<-chan logbus.Entry, func())
 	SubscribeStatus(buffer int) (<-chan status.Snapshot, func())
@@ -179,6 +182,14 @@ func (s *Server) handle(conn net.Conn, done <-chan struct{}) {
 	case OpRetry:
 		s.Backend.Retry()
 		_ = enc.Encode(Response{OK: true})
+
+	case OpPause, OpResume:
+		if err := s.Backend.SetPaused(req.Op == OpPause); err != nil {
+			_ = enc.Encode(Response{Error: err.Error()})
+			return
+		}
+		snap := s.Backend.Snapshot()
+		_ = enc.Encode(Response{OK: true, Status: &snap})
 
 	case OpReload:
 		result, err := s.Backend.Reload()

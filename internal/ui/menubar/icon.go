@@ -5,68 +5,67 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"math"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
-// Icons are drawn rather than shipped as assets, so there is nothing to keep in
-// sync with the palette and nothing to lose. A filled disc reads at menu-bar
-// size where a glyph does not.
-const iconSize = 22
+// The menu bar shows a short coloured word rather than a coloured dot.
+//
+// A dot needs a legend: green, amber and grey mean nothing until somebody
+// tells you what they mean, and the difference between amber and grey is not
+// obvious at a glance in a menu bar. A word says which state it is in, and the
+// colour then reinforces it instead of carrying it alone — which also leaves
+// the item readable for anyone who cannot separate those hues.
+//
+// Rendered rather than set as the item's title because a title has no colour;
+// only an image can carry one.
+const (
+	iconHeight = 22
+	// baseline sits the 13-pixel face centred in that height.
+	baseline = 16
+	padding  = 2
+)
 
 var (
-	iconGreen   = disc(color.NRGBA{0x34, 0xC7, 0x59, 0xff})
-	iconYellow  = disc(color.NRGBA{0xFF, 0x9F, 0x0A, 0xff})
-	iconRed     = disc(color.NRGBA{0xFF, 0x45, 0x3A, 0xff})
-	iconUnknown = ring(color.NRGBA{0x8E, 0x8E, 0x93, 0xff})
+	green = color.NRGBA{0x1E, 0xA0, 0x4A, 0xff}
+	amber = color.NRGBA{0xC7, 0x7A, 0x0A, 0xff}
+	red   = color.NRGBA{0xD3, 0x35, 0x2A, 0xff}
+	grey  = color.NRGBA{0x80, 0x80, 0x85, 0xff}
 )
 
-// disc renders an antialiased filled circle.
-func disc(c color.NRGBA) []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, iconSize, iconSize))
-	centre := float64(iconSize) / 2
-	radius := centre - 4
+var (
+	iconOK      = label("VPN OK", green)
+	iconWarn    = label("VPN !", amber)
+	iconError   = label("VPN X", red)
+	iconUnknown = label("VPN ?", grey)
+	iconPaused  = label("VPN OFF", grey)
+)
 
-	for y := 0; y < iconSize; y++ {
-		for x := 0; x < iconSize; x++ {
-			d := math.Hypot(float64(x)+0.5-centre, float64(y)+0.5-centre)
-			img.SetNRGBA(x, y, shade(c, coverage(radius-d)))
-		}
+// label draws text in one colour on transparency, sized to fit.
+func label(text string, c color.NRGBA) []byte {
+	face := basicfont.Face7x13
+	width := font.MeasureString(face, text).Ceil() + padding*2
+
+	img := image.NewNRGBA(image.Rect(0, 0, width, iconHeight))
+
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(c),
+		Face: face,
+		Dot:  fixed.P(padding, baseline),
 	}
+	d.DrawString(text)
+
 	return encode(img)
 }
 
-// ring renders an outline, used for "state unknown" so that a disconnected
-// menu bar does not look like a healthy one in a colour nobody notices.
-func ring(c color.NRGBA) []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, iconSize, iconSize))
-	centre := float64(iconSize) / 2
-	radius := centre - 4
-	const width = 2.0
-
-	for y := 0; y < iconSize; y++ {
-		for x := 0; x < iconSize; x++ {
-			d := math.Hypot(float64(x)+0.5-centre, float64(y)+0.5-centre)
-			// Distance from the stroke's centre line, so both edges soften.
-			img.SetNRGBA(x, y, shade(c, coverage(width/2-math.Abs(d-radius))))
-		}
-	}
-	return encode(img)
-}
-
-// coverage turns a signed distance in pixels into an alpha ramp one pixel wide.
-func coverage(signedDistance float64) float64 {
-	return math.Max(0, math.Min(1, signedDistance+0.5))
-}
-
-func shade(c color.NRGBA, alpha float64) color.NRGBA {
-	return color.NRGBA{c.R, c.G, c.B, uint8(alpha * float64(c.A))}
-}
-
+// encode is separate so a failure here is a blank icon rather than a panic in
+// a package-level initialiser.
 func encode(img image.Image) []byte {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		// Encoding an in-memory image cannot fail for any reason worth
-		// handling here; an empty icon is a visible, harmless fallback.
 		return nil
 	}
 	return buf.Bytes()

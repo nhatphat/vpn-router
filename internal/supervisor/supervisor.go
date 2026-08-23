@@ -79,6 +79,7 @@ type Supervisor struct {
 	resolvers []status.Resolver
 
 	restart map[string]chan struct{}
+	pause   *pauseState
 }
 
 func New(o Options) (*Supervisor, error) {
@@ -109,6 +110,7 @@ func New(o Options) (*Supervisor, error) {
 		comps:      make(map[string]status.Component),
 		statusSubs: make(map[int]chan status.Snapshot),
 		started:    time.Now(),
+		pause:      newPauseState(),
 		restart: map[string]chan struct{}{
 			status.CompVPN:       make(chan struct{}, 1),
 			status.CompDNSRouter: make(chan struct{}, 1),
@@ -117,6 +119,14 @@ func New(o Options) (*Supervisor, error) {
 	}
 
 	s.current.Store(cfg)
+
+	// A pause outlives the daemon on purpose: someone who turned the stack
+	// off does not expect a reboot to turn it back on.
+	if paused, err := readPaused(cfg.Supervisor.StateDir); err == nil && paused {
+		s.pause.Set(true)
+		o.Bus.Publishf(logbus.SourceSupervisor, logbus.LevelWarn,
+			"starting paused; run \"vpnctl start\" to route traffic again")
+	}
 
 	for _, name := range []string{status.CompVPN, status.CompSingBox, status.CompDNSRouter, status.CompRacer} {
 		s.order = append(s.order, name)
@@ -144,6 +154,7 @@ func New(o Options) (*Supervisor, error) {
 		OnPhase: func(p status.Phase, detail string) {
 			s.setComp(status.CompSingBox, p, detail, nil)
 		},
+		Gate: s.pause,
 	})
 
 	s.prober = &health.Prober{
@@ -240,6 +251,17 @@ func (s *Supervisor) runService(ctx context.Context, name string, fn func(contex
 			return err
 		}
 
+		if s.pause.Paused() {
+			s.setComp(name, status.PhaseStopped, "paused", nil)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.pause.WhileRunning():
+				delay = backoff.Min.D()
+			}
+			continue
+		}
+
 		err, restarted := s.runServiceOnce(ctx, name, restart, fn)
 		if ctx.Err() != nil {
 			s.setComp(name, status.PhaseStopped, "supervisor shutting down", nil)
@@ -297,6 +319,11 @@ func (s *Supervisor) runServiceOnce(ctx context.Context, name string, restart <-
 		<-done
 		return nil, true
 
+	case <-s.pause.WhilePaused():
+		cancel()
+		<-done
+		return nil, false
+
 	case <-ctx.Done():
 		cancel()
 		<-done
@@ -346,6 +373,50 @@ func (s *Supervisor) applyResolvers() {
 			"\"sudo killall -HUP mDNSResponder\" will pick them up)", err)
 	}
 }
+
+// stopContainerForPause takes the tunnel down with everything else. Leaving it
+// up would keep a VPN connected and a port published for a stack that is
+// meant to be off.
+func (s *Supervisor) stopContainerForPause(ctx context.Context) {
+	s.mu.Lock()
+	id := s.containerID
+	s.mu.Unlock()
+	if id == "" {
+		return
+	}
+
+	if err := s.docker.Stop(ctx, id, 15*time.Second); err != nil {
+		if ctx.Err() == nil {
+			s.logf(logbus.LevelWarn, "could not stop the VPN container: %v", err)
+		}
+		return
+	}
+	s.logf(logbus.LevelInfo, "VPN container stopped")
+}
+
+// SetPaused turns the whole stack off or on without stopping the daemon, so
+// that a menu bar running as the user can do it without a password.
+func (s *Supervisor) SetPaused(paused bool) error {
+	if !s.pause.Set(paused) {
+		return nil
+	}
+
+	if err := writePaused(s.cfg().Supervisor.StateDir, paused); err != nil {
+		s.logf(logbus.LevelWarn, "could not record the paused state: %v", err)
+	}
+
+	if paused {
+		s.logf(logbus.LevelWarn, "paused: the machine is routing its own traffic")
+	} else {
+		s.logf(logbus.LevelInfo, "resumed")
+	}
+
+	s.broadcast()
+	return nil
+}
+
+// Paused reports the current state.
+func (s *Supervisor) Paused() bool { return s.pause.Paused() }
 
 // refreshResolverState records what is configured against what is actually on
 // disk, for the status snapshot.
@@ -417,6 +488,10 @@ func (s *Supervisor) watchHealth(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+		}
+
+		if s.pause.Paused() {
+			continue
 		}
 
 		res := s.prober.Probe(ctx)
@@ -493,6 +568,17 @@ func (s *Supervisor) watchDocker(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+
+		if s.pause.Paused() {
+			s.setComp(status.CompVPN, status.PhaseStopped, "paused", nil)
+			s.stopContainerForPause(ctx)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.pause.WhileRunning():
+			}
+			continue
 		}
 
 		if err := s.docker.Ping(ctx); err != nil {
@@ -668,6 +754,9 @@ func (s *Supervisor) followContainer(ctx context.Context, id string) error {
 		case <-poll.C:
 			s.refreshContainer(ctx)
 
+		case <-s.pause.WhilePaused():
+			return nil
+
 		case <-s.restart[status.CompVPN]:
 			if !s.containerMatchesConfig(ctx, id) {
 				s.logf(logbus.LevelInfo, "the VPN container predates the current config; recreating it")
@@ -833,13 +922,18 @@ func (s *Supervisor) Snapshot() status.Snapshot {
 	snap := status.Snapshot{
 		Components: comps,
 		Resolvers:  resolvers,
+		Paused:     s.pause.Paused(),
 		Generation: s.generation,
 		Since:      s.started,
 		Version:    s.o.Version,
 	}
 	s.mu.Unlock()
 
-	snap.Overall, snap.Reason = status.Aggregate(comps)
+	if snap.Paused {
+		snap.Overall, snap.Reason = status.AggregatePaused()
+	} else {
+		snap.Overall, snap.Reason = status.Aggregate(comps)
+	}
 	return snap
 }
 

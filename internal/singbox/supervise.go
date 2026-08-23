@@ -30,6 +30,16 @@ type BreakerSpec struct {
 	Window   time.Duration
 }
 
+// Gate holds the runner down while the stack is switched off. Nil means
+// always allowed to run.
+type Gate interface {
+	Paused() bool
+	// WhileRunning is closed while the stack is running.
+	WhileRunning() <-chan struct{}
+	// WhilePaused is closed while it is paused.
+	WhilePaused() <-chan struct{}
+}
+
 type Options struct {
 	// VpnctlExe is this binary, re-executed as the shim.
 	VpnctlExe string
@@ -48,6 +58,7 @@ type Options struct {
 
 	Bus     *logbus.Bus
 	OnPhase func(phase status.Phase, detail string)
+	Gate    Gate
 }
 
 // Runner keeps sing-box running, and stops trying when continuing to try
@@ -171,6 +182,17 @@ func (r *Runner) Run(ctx context.Context) error {
 			return err
 		}
 
+		if g := r.o.Gate; g != nil && g.Paused() {
+			r.setPhase(status.PhaseStopped, "paused")
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-g.WhileRunning():
+				delay = r.o.Backoff.Min
+			}
+			continue
+		}
+
 		start := time.Now()
 		exitErr := r.runOnce(ctx)
 		ran := time.Since(start)
@@ -236,6 +258,15 @@ func (r *Runner) Run(ctx context.Context) error {
 			delay = r.o.Backoff.Max
 		}
 	}
+}
+
+// pausedSignal fires when a pause is requested, or never when nothing gates
+// this runner.
+func (r *Runner) pausedSignal() <-chan struct{} {
+	if r.o.Gate == nil {
+		return nil // a nil channel blocks forever, which is the intent
+	}
+	return r.o.Gate.WhilePaused()
 }
 
 func (r *Runner) trimFailuresLocked() {
@@ -355,6 +386,15 @@ func (r *Runner) runOnce(ctx context.Context) error {
 				r.logf(logbus.LevelWarn, "shim did not exit within 10s")
 			}
 			return ctx.Err()
+
+		case <-r.pausedSignal():
+			stop("paused")
+			select {
+			case <-waitCh:
+			case <-time.After(10 * time.Second):
+				r.logf(logbus.LevelWarn, "shim did not exit within 10s of a pause")
+			}
+			return nil
 
 		case <-r.restartCh:
 			stop("restart requested")

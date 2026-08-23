@@ -36,7 +36,8 @@ func (f *fakeDaemon) SubscribeLogs(n int) (<-chan logbus.Entry, func()) { return
 func (f *fakeDaemon) SubscribeStatus(int) (<-chan status.Snapshot, func()) {
 	return make(chan status.Snapshot), func() {}
 }
-func (f *fakeDaemon) Version() string { return "test" }
+func (f *fakeDaemon) SetPaused(bool) error { return nil }
+func (f *fakeDaemon) Version() string      { return "test" }
 
 func serve(t *testing.T) (*Server, string) {
 	t.Helper()

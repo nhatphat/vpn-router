@@ -584,7 +584,7 @@ func (s *Supervisor) watchDocker(ctx context.Context) error {
 		if err := s.docker.Ping(ctx); err != nil {
 			s.setComp(status.CompVPN, status.PhaseUnavailable,
 				"container runtime not reachable (it starts with your login session)", nil)
-			if !s.sleep(ctx, retry) {
+			if !s.sleepUnlessPauseChanges(ctx, retry) {
 				return ctx.Err()
 			}
 			continue
@@ -593,7 +593,7 @@ func (s *Supervisor) watchDocker(ctx context.Context) error {
 		id, err := s.ensureContainer(ctx)
 		if err != nil {
 			s.setComp(status.CompVPN, status.PhaseFailed, "container unavailable", err)
-			if !s.sleep(ctx, retry) {
+			if !s.sleepUnlessPauseChanges(ctx, retry) {
 				return ctx.Err()
 			}
 			continue
@@ -615,9 +615,30 @@ func (s *Supervisor) watchDocker(ctx context.Context) error {
 			s.logf(logbus.LevelWarn, "container watch ended: %v", err)
 		}
 
-		if !s.sleep(ctx, retry) {
+		if !s.sleepUnlessPauseChanges(ctx, retry) {
 			return ctx.Err()
 		}
+	}
+}
+
+// sleepUnlessPauseChanges waits, but wakes as soon as the stack is switched
+// off or on, so a transition is acted on immediately instead of at the end of
+// a retry interval.
+func (s *Supervisor) sleepUnlessPauseChanges(ctx context.Context, d time.Duration) bool {
+	var change <-chan struct{}
+	if s.pause.Paused() {
+		change = s.pause.WhileRunning()
+	} else {
+		change = s.pause.WhilePaused()
+	}
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-change:
+		return true
+	case <-time.After(d):
+		return true
 	}
 }
 
@@ -755,6 +776,11 @@ func (s *Supervisor) followContainer(ctx context.Context, id string) error {
 			s.refreshContainer(ctx)
 
 		case <-s.pause.WhilePaused():
+			// Stopped here rather than left to the outer loop, which waits
+			// before looking again. Someone who just asked for their own
+			// network back should not watch the tunnel stay up for another
+			// five seconds.
+			s.stopContainerForPause(ctx)
 			return nil
 
 		case <-s.restart[status.CompVPN]:
@@ -845,15 +871,6 @@ func (s *Supervisor) streamContainerLogs(ctx context.Context, id string) {
 		lvl, msg := logbus.ClassifyPlain(line)
 		s.o.Bus.Publish(logbus.SourceVPN, lvl, msg)
 	})
-}
-
-func (s *Supervisor) sleep(ctx context.Context, d time.Duration) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(d):
-		return true
-	}
 }
 
 func (s *Supervisor) bumpGeneration(reason string) {

@@ -79,7 +79,7 @@ func Run(o Options) error {
 }
 
 func (a *app) onReady() {
-	systray.SetIcon(iconUnknown)
+	systray.SetTitle(labelUnknown)
 	systray.SetTooltip("vpnctl")
 
 	a.header = systray.AddMenuItem("connecting to the daemon…", "")
@@ -192,18 +192,18 @@ func logf(format string, args ...any) {
 }
 
 func (a *app) apply(snap *status.Snapshot) {
-	icon := iconUnknown
+	label := labelUnknown
 	switch {
 	case snap.Paused:
-		icon = iconPaused
+		label = labelPaused
 	case snap.Overall == status.OverallGreen:
-		icon = iconOK
+		label = labelOK
 	case snap.Overall == status.OverallYellow:
-		icon = iconWarn
+		label = labelWarn
 	case snap.Overall == status.OverallRed:
-		icon = iconError
+		label = labelError
 	}
-	systray.SetIcon(icon)
+	systray.SetTitle(label)
 	systray.SetTooltip("vpnctl — " + snap.Reason)
 
 	if snap.Paused {
@@ -356,7 +356,7 @@ func (a *app) announce(snap *status.Snapshot) {
 
 func (a *app) showDisconnected(err error) {
 	_ = err
-	systray.SetIcon(iconUnknown)
+	systray.SetTitle(labelUnknown)
 	systray.SetTooltip("vpnctl — daemon unreachable")
 	a.header.SetTitle("daemon unreachable")
 

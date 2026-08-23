@@ -204,9 +204,9 @@ daemon itself is wedged and cannot be asked, `stop` falls back to unloading its
 launchd job, and that does need root.
 
 There is also a menu bar item, installed by default and started at login. It
-shows the state as a short coloured word — `VPN OK`, `VPN !`, `VPN X`,
-`VPN OFF` — rather than a coloured dot, because a dot needs a legend and amber
-against grey is not a distinction to rely on at a glance. It stops and starts
+shows the state as `✅ VPN`, `⚠️ VPN`, `❌ VPN` or `⏸️ VPN` — a coloured dot
+needs a legend before it means anything, and amber against grey is not a
+distinction to rely on at a glance. It stops and starts
 the stack, restarts any component, applies an edited config, and opens the log
 page. Its **Quit menu bar** does exactly that and nothing else:
 the daemon and the tunnel keep running, which is why the item is not called

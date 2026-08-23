@@ -402,6 +402,15 @@ func setUpContainer(cfg *config.Config, o Options) string {
 	}
 	o.logf("docker: reachable at %s", dockerctl.DefaultSocket)
 
+	// Installing over a stopped stack must not quietly start it again.
+	// Someone who switched routing off and then upgraded did not ask for it
+	// back, and the daemon would only have to stop it a moment later.
+	if pausedOnDisk(cfg.Supervisor.StateDir) {
+		o.logf("the stack is switched off, so the container was left alone")
+		o.logf("  turn it back on with: vpnctl start")
+		return dockerctl.DefaultSocket
+	}
+
 	box := vpnbox.Options{Docker: c, Cfg: cfg, Logf: o.logf}
 
 	if err := vpnbox.StopLegacyContainers(ctx, box); err != nil {
@@ -420,6 +429,16 @@ func setUpContainer(cfg *config.Config, o Options) string {
 	}
 
 	return dockerctl.DefaultSocket
+}
+
+// pausedOnDisk reports whether the stack was deliberately switched off. The
+// daemon owns this file; the installer only reads it.
+func pausedOnDisk(stateDir string) bool {
+	data, err := os.ReadFile(filepath.Join(stateDir, "paused"))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == "1"
 }
 
 func writeRecord(r Record) error {

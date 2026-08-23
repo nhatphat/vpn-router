@@ -381,8 +381,19 @@ func (s *Supervisor) stopContainerForPause(ctx context.Context) {
 	s.mu.Lock()
 	id := s.containerID
 	s.mu.Unlock()
+
 	if id == "" {
-		return
+		// A daemon that started paused never went looking for the container,
+		// so it has no id to stop — and something else may well have started
+		// one, which is exactly the case worth handling.
+		ct, err := s.findExistingContainer(ctx)
+		if err != nil {
+			return
+		}
+		if ct.State != "running" {
+			return
+		}
+		id = ct.ID
 	}
 
 	if err := s.docker.Stop(ctx, id, 15*time.Second); err != nil {

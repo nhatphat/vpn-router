@@ -27,7 +27,14 @@ cleanup_all() {
   fi
 }
 
-trap cleanup_all EXIT INT TERM
+# The EXIT trap does the cleaning; the signal traps only have to leave.
+#
+# A handler that does not exit is why this container never stopped on its own:
+# bash runs the handler and then carries straight on with the loop below, so
+# every stop waited out the runtime's grace period and ended in SIGKILL. That
+# is 15 seconds on every restart, every pause and every uninstall.
+trap cleanup_all EXIT
+trap 'exit 0' INT TERM
 
 if [[ ! -c /dev/net/tun ]]; then
   log "ERROR: /dev/net/tun is unavailable. Run with --device=/dev/net/tun and NET_ADMIN."

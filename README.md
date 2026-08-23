@@ -188,8 +188,14 @@ checkout — `vpnctl doctor` verifies that under `independence`.
 | `vpnctl resolver [on\|off <domain>]` | list scoped resolver domains, or switch one |
 | `vpnctl restart <component>` | `vpn`, `singbox`, `dns-router`, `racer`, or `all` |
 | `vpnctl retry` | leave safe mode after the breaker gave up on sing-box |
+| `sudo vpnctl stop` / `start` | put the whole stack down and back up, removing nothing |
 
-None of these need `sudo`.
+All but the last need no `sudo`.
+
+`stop` is there because wanting the machine's own routing back for an hour is
+an ordinary thing to want, and uninstalling to get it is far too much. It
+unloads the daemon — which takes sing-box and the TUN with it — stops the menu
+bar and the VPN container, and removes nothing. `start` puts it all back.
 
 There is also a menu bar item, installed by default and started at login. It
 shows the same status, restarts any component, applies an edited config, and

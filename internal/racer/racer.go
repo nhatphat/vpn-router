@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -129,14 +130,43 @@ type raceResult struct {
 }
 
 // dial is the entry point wired into the SOCKS5 server as its Dial callback.
-func (r *racer) dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	if via, ok := r.learned.Load(addr); ok {
-		conn, err := r.dialVia(ctx, via.(string), network, addr)
-		if err == nil {
-			return conn, nil
+//
+// It recovers from a panic, which is not the usual advice and is not here to
+// make bugs survivable. The library calls this on a per-connection goroutine,
+// so a panic anywhere inside it takes down the whole process — and this
+// process is what every application on the machine routes through. The blast
+// radius of one bad connection must not be the machine's networking. It is
+// logged at error level and returned as a failed dial, which is loud in
+// exactly the place someone would look.
+func (r *racer) dial(ctx context.Context, network, addr string) (conn net.Conn, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			r.logf("racer: BUG: panic dialling %s: %v\n%s", addr, p, debug.Stack())
+			conn, err = nil, fmt.Errorf("racer: internal error dialling %s", addr)
 		}
-		r.logf("racer: learned path %s for %s failed (%v), re-racing", via, addr, err)
-		r.learned.Delete(addr)
+	}()
+
+	return r.dialLocked(ctx, network, addr)
+}
+
+func (r *racer) dialLocked(ctx context.Context, network, addr string) (net.Conn, error) {
+	if v, ok := r.learned.Load(addr); ok {
+		p := v.(learnedPath)
+
+		if expired, why := r.stale(p, time.Now()); expired {
+			// Dropped rather than retried: the reason to re-race is that the
+			// old answer may be wrong, and a wrong answer that still connects
+			// is the failure mode worth avoiding.
+			r.logf("racer: re-racing %s, %s", addr, why)
+			r.learned.Delete(addr)
+		} else {
+			conn, err := r.dialVia(ctx, p.via, network, addr)
+			if err == nil {
+				return conn, nil
+			}
+			r.logf("racer: learned path %s for %s failed (%v), re-racing", p.via, addr, err)
+			r.learned.Delete(addr)
+		}
 	}
 	return r.race(ctx, network, addr)
 }

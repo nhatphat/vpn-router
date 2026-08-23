@@ -58,6 +58,35 @@ func installCmd(args []string) error {
 	return nil
 }
 
+func stopCmd(args []string) error {
+	fs := flag.NewFlagSet("stop", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	fmt.Println("Stopping vpnctl:")
+	return installer.Stop(installer.Options{
+		Logf: func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
+	})
+}
+
+func startCmd(args []string) error {
+	fs := flag.NewFlagSet("start", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	fmt.Println("Starting vpnctl:")
+	if err := installer.Start(installer.Options{
+		Logf: func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
+	}); err != nil {
+		return err
+	}
+
+	fmt.Println("\nWatch it come up with:  vpnctl status -w")
+	return nil
+}
+
 func uninstallCmd(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
 	purge := fs.Bool("purge", false, "also delete the VPN container, its image and the logs")

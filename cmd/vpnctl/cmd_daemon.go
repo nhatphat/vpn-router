@@ -55,13 +55,16 @@ func daemon(args []string) error {
 	}
 
 	bus := logbus.New(cfg.UI.LogBufferLines)
+
+	// Subscribed before anything is published. A subscriber only receives
+	// what comes after it, and the startup line is the one that says which
+	// version and config a later crash belongs to — the single most useful
+	// line in the file was the one missing from it.
+	go mirrorToStderr(bus)
+
 	bus.Publishf(logbus.SourceSupervisor, logbus.LevelInfo,
 		"vpnctl %s starting: config=%s singbox=%s", version, cfg.Path, binary)
 	warnAboutSharing(cfg, bus)
-
-	// Mirror the bus to stderr, which launchd captures into the daemon's log
-	// file. Without this a crash before the socket exists would be invisible.
-	go mirrorToStderr(bus)
 
 	if *pprofAddr != "" {
 		startPprof(*pprofAddr, bus.Logf(logbus.SourceSupervisor, logbus.LevelWarn))

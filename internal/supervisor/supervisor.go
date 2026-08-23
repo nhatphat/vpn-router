@@ -52,6 +52,9 @@ type Options struct {
 	// RouterProcess is the process name the generated sing-box document must
 	// name in its loop-breaking route rule; see internal/singbox.
 	RouterProcess string
+	// ResolverDir is where scoped resolvers are written. Only tests set it;
+	// everything else takes the one place macOS reads.
+	ResolverDir string
 }
 
 type Supervisor struct {
@@ -80,6 +83,11 @@ type Supervisor struct {
 
 	restart map[string]chan struct{}
 	pause   *pauseState
+
+	// reloadResolvers tells the system resolver to re-read the directory.
+	// A field so a test can write resolvers without signalling a real
+	// mDNSResponder.
+	reloadResolvers func() error
 }
 
 func New(o Options) (*Supervisor, error) {
@@ -103,6 +111,10 @@ func New(o Options) (*Supervisor, error) {
 		return nil, err
 	}
 
+	if o.ResolverDir == "" {
+		o.ResolverDir = resolver.Dir
+	}
+
 	s := &Supervisor{
 		o:          o,
 		holder:     holder,
@@ -111,6 +123,8 @@ func New(o Options) (*Supervisor, error) {
 		statusSubs: make(map[int]chan status.Snapshot),
 		started:    time.Now(),
 		pause:      newPauseState(),
+
+		reloadResolvers: resolver.Reload,
 		restart: map[string]chan struct{}{
 			status.CompVPN:       make(chan struct{}, 1),
 			status.CompDNSRouter: make(chan struct{}, 1),
@@ -331,7 +345,18 @@ func (s *Supervisor) runServiceOnce(ctx context.Context, name string, restart <-
 	}
 }
 
-// applyResolvers makes /etc/resolver match the configured suffixes.
+// applyResolvers makes /etc/resolver match what the stack is currently doing.
+//
+// Running means the configured suffixes are written and point at the daemon's
+// own DNS port. Paused means none of them are, because a scoped resolver
+// naming a listener that is not running is a black hole: those names would
+// stop resolving even on a network that answers them perfectly well. Stopping
+// vpnctl has to leave the machine resolving names the way it did before vpnctl
+// existed.
+//
+// One function for both states rather than a removal path bolted onto pause,
+// so every caller — startup, reload, pause, resume — states the same rule and
+// there is no ordering in which the directory disagrees with the switch.
 //
 // It runs from the daemon rather than from install so that "vpnctl reload"
 // applies a changed list, and because the port it points at is the daemon's
@@ -341,24 +366,31 @@ func (s *Supervisor) runServiceOnce(ctx context.Context, name string, restart <-
 func (s *Supervisor) applyResolvers() {
 	cfg := s.cfg()
 
-	host, portStr, err := net.SplitHostPort(cfg.DNSRouter.Listen)
-	if err != nil {
-		s.logf(logbus.LevelError, "resolver: cannot read dns_router.listen: %v", err)
-		return
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		s.logf(logbus.LevelError, "resolver: bad port in dns_router.listen: %v", err)
-		return
-	}
+	var result resolver.Result
 
-	// Only the enabled ones are written; anything switched off has its file
-	// removed by Apply, because a resolver file that exists is in effect.
-	result, err := resolver.Apply(resolver.Dir, cfg.DNSRouter.ResolverDomains.Enabled(), host, port,
-		s.o.Bus.Logf(logbus.SourceDNS, logbus.LevelWarn))
-	if err != nil {
-		s.logf(logbus.LevelError, "resolver: %v", err)
-		return
+	if s.pause.Paused() {
+		result = resolver.RemoveAll(s.o.ResolverDir, s.o.Bus.Logf(logbus.SourceDNS, logbus.LevelWarn))
+	} else {
+		host, portStr, err := net.SplitHostPort(cfg.DNSRouter.Listen)
+		if err != nil {
+			s.logf(logbus.LevelError, "resolver: cannot read dns_router.listen: %v", err)
+			return
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			s.logf(logbus.LevelError, "resolver: bad port in dns_router.listen: %v", err)
+			return
+		}
+
+		// Only the enabled ones are written; anything switched off has its
+		// file removed by Apply, because a resolver file that exists is in
+		// effect.
+		result, err = resolver.Apply(s.o.ResolverDir, cfg.DNSRouter.ResolverDomains.Enabled(), host, port,
+			s.o.Bus.Logf(logbus.SourceDNS, logbus.LevelWarn))
+		if err != nil {
+			s.logf(logbus.LevelError, "resolver: %v", err)
+			return
+		}
 	}
 
 	s.refreshResolverState()
@@ -368,7 +400,7 @@ func (s *Supervisor) applyResolvers() {
 	}
 
 	s.logf(logbus.LevelInfo, "resolver: %s", result)
-	if err := resolver.Reload(); err != nil {
+	if err := s.reloadResolvers(); err != nil {
 		s.logf(logbus.LevelWarn, "resolver: %v (the files are in place; a reboot or a manual "+
 			"\"sudo killall -HUP mDNSResponder\" will pick them up)", err)
 	}
@@ -416,6 +448,16 @@ func (s *Supervisor) SetPaused(paused bool) error {
 		s.logf(logbus.LevelWarn, "could not record the paused state: %v", err)
 	}
 
+	// The directory follows the switch straight away. Components stop and
+	// start concurrently with this, so for a few milliseconds either way the
+	// two disagree — harmlessly in both orderings. Pausing, a query that
+	// arrives after the files are gone but before the router stops simply
+	// reaches the state pausing is asking for. Resuming, one that arrives
+	// after the files are back but before the router binds fails, which is
+	// the fail-closed half of the trade and the same window the daemon
+	// already has at startup.
+	s.applyResolvers()
+
 	if paused {
 		s.logf(logbus.LevelWarn, "paused: the machine is routing its own traffic")
 	} else {
@@ -433,7 +475,7 @@ func (s *Supervisor) Paused() bool { return s.pause.Paused() }
 // disk, for the status snapshot.
 func (s *Supervisor) refreshResolverState() {
 	managed := map[string]bool{}
-	for _, d := range resolver.Managed(resolver.Dir) {
+	for _, d := range resolver.Managed(s.o.ResolverDir) {
 		managed[d] = true
 	}
 
@@ -441,7 +483,7 @@ func (s *Supervisor) refreshResolverState() {
 	for _, entry := range s.cfg().DNSRouter.ResolverDomains {
 		state := status.Resolver{Domain: entry.Domain, Enabled: entry.Enabled}
 
-		if _, err := os.Stat(filepath.Join(resolver.Dir, entry.Domain)); err == nil {
+		if _, err := os.Stat(filepath.Join(s.o.ResolverDir, entry.Domain)); err == nil {
 			if managed[entry.Domain] {
 				state.Installed = true
 			} else {

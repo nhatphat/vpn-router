@@ -74,8 +74,9 @@ func stopCmd(args []string) error {
 	}
 
 	if _, err := client(*socketPath).Do(ipc.Request{Op: ipc.OpPause}); err == nil {
-		fmt.Println("Stopped. The machine is routing its own traffic again.")
-		fmt.Println("Nothing was removed; the daemon is still there to turn it back on.")
+		fmt.Println("Stopped. The machine is routing its own traffic again,")
+		fmt.Println("including any suffix that was resolved through vpnctl.")
+		fmt.Println("Your configuration is untouched; the daemon is still there to turn it back on.")
 		fmt.Println()
 		fmt.Println("Start it again with:  vpnctl start")
 		return nil

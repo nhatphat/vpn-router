@@ -14,6 +14,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -109,14 +110,21 @@ func Run(o Options) *Report {
 		return r
 	}
 
+	// Asked once and shared. Two checks need the daemon's view, and asking
+	// twice could describe two different moments — a report that says the
+	// stack is running and its resolvers are missing because it is stopped
+	// is worse than either answer alone.
+	snap, daemonErr := daemonSnapshot(o.SocketPath)
+	paused := snap != nil && snap.Paused
+
 	checkReferencedFiles(r, cfg)
 	checkIndependence(r, cfg)
 	checkSharedDir(r, cfg)
-	checkResolvers(r, cfg)
+	checkResolvers(r, cfg, resolver.Dir, paused)
 	checkChecksumPin(r, cfg)
 	binary := checkSingBoxBinary(r, cfg)
 	checkDocument(r, cfg, binary)
-	checkDaemon(r, o.SocketPath)
+	checkDaemon(r, snap, daemonErr)
 	checkPorts(r, cfg, o.SocketPath)
 	checkDocker(ctx, r, cfg)
 
@@ -296,9 +304,11 @@ func checkChecksumPin(r *Report, cfg *config.Config) {
 // list at startup and on reload, so a config edited since then has not taken
 // effect, and a file written by hand for the same suffix is deliberately left
 // alone rather than taken over.
-func checkResolvers(r *Report, cfg *config.Config) {
+// dir is a parameter only so a test can point it somewhere writable; every
+// caller passes the one directory macOS reads.
+func checkResolvers(r *Report, cfg *config.Config, dir string, paused bool) {
 	domains := cfg.DNSRouter.ResolverDomains
-	managed := resolver.Managed(resolver.Dir)
+	managed := resolver.Managed(dir)
 
 	if len(domains) == 0 && len(managed) == 0 {
 		r.ok("scoped resolvers", "none configured")
@@ -324,11 +334,24 @@ func checkResolvers(r *Report, cfg *config.Config) {
 	for _, entry := range domains {
 		configured[entry.Domain] = true
 
-		path := filepath.Join(resolver.Dir, entry.Domain)
+		path := filepath.Join(dir, entry.Domain)
 		body, err := os.ReadFile(path)
 		present := err == nil
 
 		switch {
+		// Paused, the daemon holds no scoped resolvers, so the expected state
+		// is inverted: a file still present is not the config catching up, it
+		// is a suffix being sent to a DNS router that is not running.
+		case paused && present && inManaged[entry.Domain]:
+			problems = append(problems, entry.Domain+
+				" is still installed while vpnctl is stopped, so those names cannot resolve")
+		case paused && present:
+			problems = append(problems, entry.Domain+" is answered by a file vpnctl did not write")
+		case paused && !entry.Enabled:
+			states = append(states, entry.Domain+" off")
+		case paused:
+			states = append(states, entry.Domain+" on, in effect once vpnctl starts")
+
 		case !entry.Enabled && present && inManaged[entry.Domain]:
 			// Off but still installed means the system resolver is still
 			// sending those names here, so "off" is not true yet.
@@ -352,15 +375,30 @@ func checkResolvers(r *Report, cfg *config.Config) {
 		}
 	}
 
+	fix := "vpnctl reload"
+	if paused {
+		fix = "vpnctl start"
+	}
+
 	if len(problems) > 0 {
 		detail := strings.Join(problems, "; ")
 		if len(states) > 0 {
 			detail += " (" + strings.Join(states, ", ") + ")"
 		}
-		r.warn("scoped resolvers", detail, "vpnctl reload")
+		r.warn("scoped resolvers", detail, fix)
 		return
 	}
 
+	// No "-> listen address" while paused: nothing is being sent there. The
+	// per-domain states are still listed, because a suffix declared off and
+	// one waiting for a start are different situations. And no early return
+	// on "paused, nothing of ours installed" — a file somebody else wrote is
+	// still sending those names somewhere, and staying quiet about it would
+	// be a report that says all is well while DNS goes to a third party.
+	if paused {
+		r.ok("scoped resolvers", strings.Join(states, ", ")+"; none installed while vpnctl is stopped")
+		return
+	}
 	r.ok("scoped resolvers", strings.Join(states, ", ")+" -> "+cfg.DNSRouter.Listen)
 }
 
@@ -409,21 +447,35 @@ func checkDocument(r *Report, cfg *config.Config, binary string) {
 	r.ok("sing-box config", fmt.Sprintf("%d bytes, accepted by sing-box", len(doc)))
 }
 
-func checkDaemon(r *Report, socketPath string) {
+// daemonSnapshot asks the daemon what it thinks is going on, once.
+//
+// A response carrying no status is an error rather than something to hand on:
+// every caller would otherwise have to guard a pointer that is almost never
+// nil, which is how it ends up dereferenced.
+func daemonSnapshot(socketPath string) (*status.Snapshot, error) {
+	c := &ipc.Client{Path: socketPath, Timeout: 3 * time.Second}
+	resp, err := c.Do(ipc.Request{Op: ipc.OpStatus})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status == nil {
+		return nil, errors.New("it answered without a status")
+	}
+	return resp.Status, nil
+}
+
+func checkDaemon(r *Report, snap *status.Snapshot, err error) {
 	if !installer.DaemonLoaded() {
 		r.fail("daemon", "launchd does not have "+installer.DaemonLabel, "sudo vpnctl install")
 		return
 	}
 
-	c := &ipc.Client{Path: socketPath, Timeout: 3 * time.Second}
-	resp, err := c.Do(ipc.Request{Op: ipc.OpStatus})
 	if err != nil {
 		r.fail("daemon", "loaded, but its control socket does not answer: "+err.Error(),
 			"sudo launchctl kickstart -k system/"+installer.DaemonLabel)
 		return
 	}
 
-	snap := resp.Status
 	detail := fmt.Sprintf("%s (%s)", snap.Overall, snap.Reason)
 
 	// Mirror the daemon's own verdict rather than reporting "ok" for having

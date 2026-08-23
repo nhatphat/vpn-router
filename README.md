@@ -196,7 +196,10 @@ None of these need `sudo`.
 an ordinary thing to want, and uninstalling to get it is far too much. The
 daemon keeps running and takes everything else down — sing-box, the TUN, the
 resolver, the racer, the VPN container — so the machine routes its own traffic
-again and nothing is removed. Because the daemon stays up, `start` needs no
+again. The scoped resolvers in `/etc/resolver` go with them and come back on
+`start`: pointing a suffix at a DNS router that is not running would leave
+those names unable to resolve at all, which is not what stopping should mean.
+Nothing else is removed. Because the daemon stays up, `start` needs no
 password either, which is what lets the menu bar offer both with one click.
 
 A stop is remembered: a reboot does not quietly turn routing back on. If the
@@ -524,14 +527,21 @@ the tunnel: these names are answered *here*, per suffix, so an internal name is
 never asked of a public resolver — not even briefly, and not if something
 bypasses the TUN.
 
-Two consequences are deliberate. The files outlive the daemon: with nothing
-listening, those names fail rather than fall back to a public resolver, which is
-the same fail-closed choice this project makes for corporate traffic.
-`vpnctl uninstall` removes them, and so does deleting the line and reloading.
+Two consequences are deliberate. The files outlive a *failure*: if the daemon
+crashes, those names fail rather than fall back to a public resolver, which is
+the same fail-closed choice this project makes for corporate traffic. They do
+not outlive a *decision* — `vpnctl stop` removes them and `vpnctl start` writes
+them again, because being asked to stop means the machine should resolve names
+the way it would if this program had never been installed. Leaving them behind
+would turn "stop vpnctl" into "this suffix no longer resolves at all", even on
+a network that answers it perfectly well without any tunnel. `vpnctl uninstall`
+removes them for good, and so does deleting the line and reloading.
+
 And a resolver file somebody wrote by hand for the same suffix is left alone
 unless it already points at the same place — silently redirecting where a
-machine sends its DNS is not a decision this program gets to make. `vpnctl
-doctor` reports either case.
+machine sends its DNS is not a decision this program gets to make, and stopping
+is not consent to it either, so a pause leaves those alone too. `vpnctl doctor`
+reports every case.
 
 ## OTP prompt compatibility
 

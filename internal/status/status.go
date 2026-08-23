@@ -71,6 +71,34 @@ type Resolver struct {
 // InEffect reports whether names under this suffix currently reach us.
 func (r Resolver) InEffect() bool { return r.Installed || r.Foreign }
 
+// Note describes how intent and effect differ, or "" when they agree.
+//
+// It lives here because the menu bar and the command line both have to say
+// this, and two copies of the same reasoning drift: one of them ends up still
+// calling a paused suffix "not installed yet", which reads as a fault about to
+// be corrected rather than the deliberate state it is.
+func (r Resolver) Note(paused bool) string {
+	switch {
+	case r.Foreign:
+		return "answered by a file vpnctl did not write"
+
+	case paused && r.Installed:
+		// Pausing removes these, so one still present is black-holing those
+		// names at a DNS router that is not running.
+		return "still installed while vpnctl is stopped, so these names cannot resolve"
+	case paused && r.Enabled:
+		return "not in effect while vpnctl is stopped"
+	case paused:
+		return ""
+
+	case r.Enabled && !r.Installed:
+		return "not installed yet"
+	case !r.Enabled && r.Installed:
+		return "still installed"
+	}
+	return ""
+}
+
 type Snapshot struct {
 	Overall    Overall     `json:"overall"`
 	Reason     string      `json:"reason"`

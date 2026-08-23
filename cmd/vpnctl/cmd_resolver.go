@@ -64,8 +64,9 @@ func listResolvers(socketPath, configPath string) error {
 	}
 
 	effect := map[string]status.Resolver{}
-	known := false
+	known, paused := false, false
 	if resp, err := client(socketPath).Do(ipc.Request{Op: ipc.OpStatus}); err == nil && resp.Status != nil {
+		paused = resp.Status.Paused
 		for _, r := range resp.Status.Resolvers {
 			effect[r.Domain] = r
 			known = true
@@ -80,13 +81,8 @@ func listResolvers(socketPath, configPath string) error {
 
 		note := ""
 		if r, ok := effect[d.Domain]; ok {
-			switch {
-			case r.Foreign:
-				note = "  (answered by a file vpnctl did not write)"
-			case r.Enabled && !r.Installed:
-				note = "  (not installed yet)"
-			case !r.Enabled && r.Installed:
-				note = "  (still installed)"
+			if n := r.Note(paused); n != "" {
+				note = "  (" + n + ")"
 			}
 		} else if !known {
 			note = "  (the daemon has not reported on this one)"
@@ -111,10 +107,25 @@ func setResolver(socketPath, configPath, domain string, enabled bool) error {
 		return fmt.Errorf("saved to %s, but the daemon did not apply it: %w", configPath, err)
 	}
 
+	// A paused daemon holds no scoped resolvers at all, so saying the suffix
+	// is now resolved through vpnctl would be untrue until someone starts it.
+	if enabled && daemonPaused(socketPath) {
+		fmt.Printf("%s is on; it takes effect when vpnctl starts\n", domain)
+		return nil
+	}
+
 	if enabled {
 		fmt.Printf("%s is on, resolved through vpnctl\n", domain)
 	} else {
 		fmt.Printf("%s is off, its scoped resolver removed\n", domain)
 	}
 	return nil
+}
+
+// daemonPaused reports whether the stack is switched off, treating an
+// unreachable daemon as running: the message it guards is a caveat, and
+// inventing one because a socket did not answer would be its own confusion.
+func daemonPaused(socketPath string) bool {
+	resp, err := client(socketPath).Do(ipc.Request{Op: ipc.OpStatus})
+	return err == nil && resp.Status != nil && resp.Status.Paused
 }

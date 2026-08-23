@@ -244,7 +244,7 @@ func (a *app) apply(snap *status.Snapshot) {
 	a.lastPaused = snap.Paused
 	a.mu.Unlock()
 
-	a.applyResolvers(snap.Resolvers)
+	a.applyResolvers(snap.Resolvers, snap.Paused)
 
 	a.announce(snap)
 }
@@ -255,7 +255,7 @@ func (a *app) apply(snap *status.Snapshot) {
 // in the config while its resolver file is missing, or switched off while a
 // file somebody else wrote still sends those names here. A tick alone would
 // claim that intent and effect always agree.
-func (a *app) applyResolvers(list []status.Resolver) {
+func (a *app) applyResolvers(list []status.Resolver, paused bool) {
 	a.mu.Lock()
 	a.resolvers = list
 	a.mu.Unlock()
@@ -274,13 +274,8 @@ func (a *app) applyResolvers(list []status.Resolver) {
 
 		entry := list[i]
 		label := entry.Domain
-		switch {
-		case entry.Foreign:
-			label += "  (answered by a file vpnctl did not write)"
-		case entry.Enabled && !entry.Installed:
-			label += "  (on, but not installed yet)"
-		case !entry.Enabled && entry.Installed:
-			label += "  (off, but still installed)"
+		if note := entry.Note(paused); note != "" {
+			label += "  (" + note + ")"
 		}
 
 		item.SetTitle(label)

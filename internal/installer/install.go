@@ -511,12 +511,7 @@ func Uninstall(o Options) error {
 	// Removed rather than left: a scoped resolver pointing at a listener that
 	// will never come back makes those names fail permanently, which is not
 	// what someone uninstalling asked for.
-	if res := resolver.RemoveAll(resolver.Dir, o.logf); res.Changed() {
-		o.logf("removed scoped resolvers: %s", strings.Join(res.Removed, ", "))
-		if err := resolver.Reload(); err != nil {
-			o.logf("could not reload the system resolver: %v", err)
-		}
-	}
+	removeScopedResolvers(o)
 
 	// Generated output, not state worth keeping: the sing-box document is
 	// rebuilt from the config on every start, and the pid files belong to
@@ -596,5 +591,22 @@ func uninstallContainer(o Options) {
 		if err := c.RemoveImage(ctx, tag); err == nil {
 			o.logf("removed the image %s", tag)
 		}
+	}
+}
+
+// removeScopedResolvers hands every suffix vpnctl manages back to the system's
+// normal resolvers.
+//
+// Shared by uninstall and by the stop that has to unload a wedged daemon,
+// because both are someone deciding the DNS router should not be answering.
+// Files vpnctl did not write are left alone, here as everywhere.
+func removeScopedResolvers(o Options) {
+	res := resolver.RemoveAll(resolver.Dir, o.logf)
+	if !res.Changed() {
+		return
+	}
+	o.logf("removed scoped resolvers: %s", strings.Join(res.Removed, ", "))
+	if err := resolver.Reload(); err != nil {
+		o.logf("could not reload the system resolver: %v", err)
 	}
 }

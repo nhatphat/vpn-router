@@ -8,11 +8,18 @@
 // which must never be asked of a public resolver, even briefly, and even if
 // something bypasses the tunnel.
 //
-// The files outlive the daemon, and that is deliberate. A scoped resolver
-// pointing at a listener that is not running makes those names fail rather
-// than leak to a public resolver — which is the same fail-closed choice the
-// rest of this project makes for corporate traffic. Removing them is what
-// "vpnctl uninstall" is for.
+// The files outlive a failure, and that is deliberate. If the daemon crashes,
+// a scoped resolver pointing at a listener that is not running makes those
+// names fail rather than leak to a public resolver — the same fail-closed
+// choice the rest of this project makes for corporate traffic.
+//
+// They do not outlive a decision. Being asked to stop is not a failure: it
+// means the machine should go back to resolving names the way it would if
+// this program had never been installed, so the supervisor removes them on
+// pause and writes them again on resume. Leaving them behind would turn "stop
+// vpnctl" into "these suffixes no longer resolve at all", including on a
+// network where they resolve perfectly well without us. "vpnctl uninstall"
+// removes them for good.
 package resolver
 
 import (

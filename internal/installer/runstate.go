@@ -39,7 +39,13 @@ func Stop(o Options) error {
 
 	stopContainer(o)
 
-	o.logf("nothing was removed. Start it again with: sudo vpnctl start")
+	// The daemon removes these itself when it is asked to stop; getting here
+	// means it could not be. Leaving them would point each suffix at a DNS
+	// router that is no longer running, so the case where something is
+	// already wedged is the one that needs this most.
+	removeScopedResolvers(o)
+
+	o.logf("the configuration is untouched. Start it again with: sudo vpnctl start")
 	return nil
 }
 

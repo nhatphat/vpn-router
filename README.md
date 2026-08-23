@@ -309,6 +309,10 @@ samples interleaved so a change in the network hurts both equally:
 | connection setup, 1KB × 15 | 157 ms | 163 ms |
 
 Throughput is indistinguishable, and a new connection costs about 6ms more.
+Both distributions are wide — a total that sits at 190ms can produce individual
+samples past 350 — so `tools/bench.sh` prints the spread beside each median and
+marks any difference smaller than it as within the scatter. A median on its own
+is how a quiet day gets read as a regression.
 Both userspace hops — sing-box's network stack and the racer's relay — are in
 that 6ms. There is no throughput case for changing the data path.
 

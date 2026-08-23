@@ -25,7 +25,7 @@ IFACE=${IFACE:-en0}
 BIG=${BIG:-20000000}
 SMALL=${SMALL:-1000}
 NBIG=${NBIG:-5}
-NSMALL=${NSMALL:-15}
+NSMALL=${NSMALL:-30}
 
 LOCAL=$(ipconfig getifaddr "$IFACE") || { echo "no address on $IFACE"; exit 1; }
 
@@ -64,6 +64,9 @@ collect() {
     printf '  sample %d/%d\r' "$i" "$count"
   done
   printf '                    \r'
+  # A newline, or the first report line lands on top of the progress counter
+  # and anything filtering the output loses it.
+  echo
 }
 
 report() {
@@ -88,14 +91,32 @@ if not d or not t:
     raise SystemExit
 
 scale = 1 / 1e6 if unit == "MB/s" else 1000 if unit == "ms" else 1
-md, mt = statistics.median(d) * scale, statistics.median(t) * scale
+d = sorted(v * scale for v in d)
+t = sorted(v * scale for v in t)
+md, mt = statistics.median(d), statistics.median(t)
 
 if unit == "MB/s":
     delta = f"{(mt / md - 1) * 100:+.0f}%" if md else ""
 else:
-    delta = f"{mt - md:+.1f} {unit}"
+    delta = f"{mt - md:+.1f}"
 
-print(f"  {label:<22} direct {md:8.2f}  tun {mt:8.2f}  {unit:<5} {delta}")
+# The spread is printed because these distributions are wide enough that a
+# median on its own invites reading noise as a change. p10-p90 rather than
+# min-max: one stalled sample should not describe the range.
+def pct(xs, q):
+    return xs[min(len(xs) - 1, max(0, int(round(q * (len(xs) - 1)))))]
+
+def iqr(xs):
+    return pct(xs, 0.75) - pct(xs, 0.25)
+
+# A difference smaller than the samples' own middle spread is not a finding,
+# and saying so is the difference between a tool that measures and one that
+# manufactures alarms.
+noise = max(iqr(d), iqr(t))
+verdict = "" if abs(mt - md) >= noise else "  (within the scatter)"
+
+print(f"  {label:<20} direct {md:7.1f} [{pct(d, 0.1):.0f}-{pct(d, 0.9):.0f}]"
+      f"   tun {mt:7.1f} [{pct(t, 0.1):.0f}-{pct(t, 0.9):.0f}]  {unit:<5} {delta}{verdict}")
 PY
 }
 

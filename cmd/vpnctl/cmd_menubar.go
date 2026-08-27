@@ -14,7 +14,7 @@ import (
 // goroutine, because a status item has to live on the process's first thread.
 func menubarCmd(args []string) error {
 	fs := flag.NewFlagSet("menubar", flag.ExitOnError)
-	start := fs.Bool("start", false, "bring the installed menu bar back after its Quit item was used")
+	start := fs.Bool("start", false, "start the installed menu bar if it is not running")
 	socketPath := fs.String("socket", ipc.DefaultSocket, "control socket path")
 	webListen := fs.String("web-listen", "", "address for the log page (default: from the config)")
 	configPath := fs.String("config", "", "config path, for the Open config item")
@@ -41,12 +41,16 @@ func menubarCmd(args []string) error {
 			opts.ConfigPath = rec.ConfigPath
 		}
 	}
-	if opts.WebListen == "" {
-		if cfg, err := loadConfig(opts.ConfigPath); err == nil {
+	if cfg, err := loadConfig(opts.ConfigPath); err == nil {
+		if opts.WebListen == "" {
 			opts.WebListen = cfg.UI.WebListen
-		} else {
-			opts.WebListen = config.Defaults().UI.WebListen
 		}
+		opts.RulesPath = cfg.SingBox.ForceVPNRules
+	} else if opts.WebListen == "" {
+		// Left unreadable rather than guessed: a relative rules path resolved
+		// against whatever directory this happens to run in would edit the
+		// wrong file, and an empty one only disables the menu.
+		opts.WebListen = config.Defaults().UI.WebListen
 	}
 
 	return menubar.Run(opts)

@@ -37,7 +37,7 @@ Usage:
   vpnctl resolver [on|off d]  list scoped resolver domains, or switch one
 
   vpnctl menubar              run the menu bar in the foreground
-  vpnctl menubar -start       bring the installed menu bar back after quitting it
+  vpnctl menubar -start       start the installed menu bar if it is not running
   vpnctl version              what this binary is, without asking the network
   vpnctl doctor               check the installation and say how to fix what is wrong
   vpnctl check [flags]        validate the config and the sing-box document it generates

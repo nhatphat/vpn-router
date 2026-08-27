@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,7 +166,7 @@ func TestLogsSnapshotAndFollow(t *testing.T) {
 
 	got := make(chan string, 1)
 	go func() {
-		_ = c.Stream(Request{Op: OpLogs, Follow: true, Source: logbus.SourceRacer}, func(r *Response) bool {
+		_ = c.Stream(context.Background(), Request{Op: OpLogs, Follow: true, Source: logbus.SourceRacer}, func(r *Response) bool {
 			if r.Entry != nil {
 				got <- r.Entry.Msg
 				return false

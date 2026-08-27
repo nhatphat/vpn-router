@@ -8,6 +8,7 @@
 package menubar
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,6 +29,9 @@ type Options struct {
 	SocketPath string
 	WebListen  string
 	ConfigPath string
+	// RulesPath is the force-VPN rule-set: listed under Force through VPN,
+	// edited on the log page.
+	RulesPath string
 	// Version is what is running, for the update check to compare against.
 	Version string
 }
@@ -52,18 +56,28 @@ type app struct {
 	resolverItems []*systray.MenuItem
 	resolverEmpty *systray.MenuItem
 
+	// The force-VPN pool works the same way, but its list comes from the
+	// rule-set file rather than from the daemon: sing-box reloads that file
+	// on its own, so nothing has to be told about an edit.
+	forceItems []*systray.MenuItem
+	forceEmpty *systray.MenuItem
+
 	updates *updateWatcher
 
 	mu          sync.Mutex
 	updateTitle string
 	lastSeen    status.Overall
 	lastPaused  bool
-	resolvers   []status.Resolver
 }
 
 // maxResolverItems bounds the checkbox pool. A machine with more scoped
 // suffixes than this is better served by editing the config than by a menu.
 const maxResolverItems = 12
+
+// maxForceVPNItems bounds the force-VPN pool. It is larger than the resolver
+// pool because a rule-set collects entries — one per environment, per AWS
+// region, per customer — where a scoped resolver list stays short.
+const maxForceVPNItems = 32
 
 // Run takes over the calling goroutine, which must be the main one: the menu
 // bar has to live on the process's first thread.
@@ -78,7 +92,15 @@ func Run(o Options) error {
 		},
 		lastSeen: "",
 	}
-	a.web = &web.Server{Addr: o.WebListen, Client: a.client}
+	// Logf: an edit through the page changes what leaves this machine, and
+	// launchd keeps this process's stderr.
+	a.web = &web.Server{
+		Addr:       o.WebListen,
+		Client:     a.client,
+		RulesPath:  o.RulesPath,
+		ConfigPath: o.ConfigPath,
+		Logf:       logf,
+	}
 	a.updates = &updateWatcher{Version: o.Version, Logf: logf}
 
 	systray.Run(a.onReady, func() {})
@@ -114,10 +136,26 @@ func (a *app) onReady() {
 		item := a.resolverRoot.AddSubMenuItemCheckbox("", "", false)
 		item.Hide()
 		a.resolverItems = append(a.resolverItems, item)
-		go a.onClick(item, func(index int) func() {
-			return func() { a.toggleResolver(index) }
-		}(i))
 	}
+	editResolvers := a.resolverRoot.AddSubMenuItem("Edit…", "Switch these on and off on the log page")
+	go a.onClick(editResolvers, a.openLogs)
+
+	// A list to glance at, not a form — like the resolver domains above.
+	// Editing lives on the log page, which can rename in place and hold more
+	// than a fixed pool of menu items; two editors for one file would be two
+	// ways to get it wrong.
+	forceRoot := systray.AddMenuItem("Force through VPN", "Domain suffixes that must never be reached directly")
+	a.forceEmpty = forceRoot.AddSubMenuItem("none forced", "")
+	a.forceEmpty.Disable()
+	for i := 0; i < maxForceVPNItems; i++ {
+		item := forceRoot.AddSubMenuItem("", "")
+		item.Hide()
+		a.forceItems = append(a.forceItems, item)
+	}
+	// Last, because it is the one item whose position must not move as
+	// domains come and go.
+	editForced := forceRoot.AddSubMenuItem("Edit…", "Add, rename and remove these on the log page")
+	go a.onClick(editForced, a.openLogs)
 
 	// Above the rest: it is the item somebody reaches for when something is
 	// wrong and they want their own network back now.
@@ -131,18 +169,12 @@ func (a *app) onReady() {
 	systray.AddSeparator()
 	openLogs := systray.AddMenuItem("Open logs…", "")
 	openConfig := systray.AddMenuItem("Open config…", "")
-	runDoctor := systray.AddMenuItem("Run doctor…", "")
 
 	// Always on screen, and disabled until there is something to click. It
 	// answers "am I on the current version" as well as "is there a new one",
 	// and the first question is the one people actually open a menu to ask.
 	a.update = systray.AddMenuItem("Checking for updates…", "")
 	a.update.Disable()
-
-	systray.AddSeparator()
-	// Named explicitly: quitting this does not stop the stack, and a menu
-	// item called "Quit" would reasonably be read as doing so.
-	quit := systray.AddMenuItem("Quit menu bar", "The daemon and the tunnel keep running")
 
 	for name, item := range restartItems {
 		go a.onClick(item, func(component string) func() {
@@ -154,15 +186,19 @@ func (a *app) onReady() {
 	go a.onClick(a.retry, a.retryNow)
 	go a.onClick(openLogs, a.openLogs)
 	go a.onClick(openConfig, a.openConfig)
-	go a.onClick(runDoctor, a.runDoctor)
 	go a.onClick(a.update, a.runUpdate)
-	go a.onClick(quit, systray.Quit)
 
 	// Asking on open, rather than on a timer, ties the one piece of outbound
 	// traffic this process makes to somebody actually looking at the menu. A
 	// laptop whose owner never opens it never asks.
-	watchMenuOpen(a.checkForUpdate)
+	// Both off the notification's own thread: it is AppKit's, and reading a
+	// file on it would stall the menu it is about to draw.
+	watchMenuOpen(func() {
+		a.checkForUpdate()
+		go a.applyForced()
+	})
 
+	go a.applyForced()
 	go a.followStatus()
 }
 
@@ -181,7 +217,7 @@ func (a *app) followStatus() {
 	connected := false
 
 	for {
-		err := a.client.Stream(ipc.Request{Op: ipc.OpStatusStream}, func(resp *ipc.Response) bool {
+		err := a.client.Stream(context.Background(), ipc.Request{Op: ipc.OpStatusStream}, func(resp *ipc.Response) bool {
 			if !connected {
 				connected = true
 				logf("connected to the daemon")
@@ -275,10 +311,6 @@ func (a *app) apply(snap *status.Snapshot) {
 // file somebody else wrote still sends those names here. A tick alone would
 // claim that intent and effect always agree.
 func (a *app) applyResolvers(list []status.Resolver, paused bool) {
-	a.mu.Lock()
-	a.resolvers = list
-	a.mu.Unlock()
-
 	if len(list) == 0 {
 		a.resolverEmpty.Show()
 	} else {
@@ -307,42 +339,58 @@ func (a *app) applyResolvers(list []status.Resolver, paused bool) {
 	}
 }
 
-// toggleResolver flips one domain in the config file and asks the daemon to
-// apply it.
+// applyForced redraws the force-VPN pool from the rule-set file.
 //
-// The menu bar writes the config itself rather than asking the daemon to. The
-// file belongs to this user and sits in their home directory beside their
-// credentials; having a root daemon edit it would put root-owned files there
-// and invert who owns the configuration.
-func (a *app) toggleResolver(index int) {
-	a.mu.Lock()
-	if index >= len(a.resolvers) {
-		a.mu.Unlock()
-		return
-	}
-	entry := a.resolvers[index]
-	a.mu.Unlock()
-
-	if a.o.ConfigPath == "" {
-		notify("Cannot change resolvers", "no config path is known")
+// It reads the file rather than the daemon's status because nothing in the
+// stack is told about this file: sing-box watches it and reloads the rules
+// itself, so the file is the only thing that knows.
+func (a *app) applyForced() {
+	if a.o.RulesPath == "" {
 		return
 	}
 
-	want := !entry.Enabled
-	if _, err := config.ToggleResolverDomain(a.o.ConfigPath, entry.Domain, want); err != nil {
-		notify("Could not change "+entry.Domain, err.Error())
+	rules, advanced, err := config.ForceVPNRules(a.o.RulesPath)
+	if err != nil {
+		// Unreadable is not the same as empty, and saying "none forced" for a
+		// file full of rules would be a lie somebody acts on.
+		logf("force-VPN rules: %v", err)
+		a.forceEmpty.SetTitle("rules unreadable")
+		a.forceEmpty.Show()
 		return
 	}
 
-	if _, err := a.client.Do(ipc.Request{Op: ipc.OpReload}); err != nil {
-		notify("Saved, but not applied", err.Error())
-		return
+	labels := make([]string, 0, len(rules)+len(advanced))
+	for _, rule := range rules {
+		// The type is worth the space when it is not the usual one: a bare
+		// "CustomerApp" in a list of domains reads as a domain.
+		if rule.Type == "domain_suffix" {
+			labels = append(labels, rule.Value)
+			continue
+		}
+		labels = append(labels, rule.Value+"  ("+rule.Type+")")
+	}
+	for range advanced {
+		labels = append(labels, "a rule with several conditions")
 	}
 
-	if want {
-		notify(entry.Domain+" on", "resolved through vpnctl")
+	if len(labels) == 0 {
+		a.forceEmpty.SetTitle("none forced")
+		a.forceEmpty.Show()
 	} else {
-		notify(entry.Domain+" off", "its scoped resolver was removed")
+		a.forceEmpty.Hide()
+	}
+
+	for i, item := range a.forceItems {
+		if i >= len(labels) {
+			item.Hide()
+			continue
+		}
+		item.SetTitle(labels[i])
+		item.Show()
+	}
+
+	if len(labels) > len(a.forceItems) {
+		logf("force-VPN rules: showing %d of %d", len(a.forceItems), len(labels))
 	}
 }
 
@@ -576,16 +624,6 @@ func alert(title, message string) {
 	}
 	script := fmt.Sprintf("display dialog %s with title %s with icon caution buttons {\"OK\"} default button \"OK\"",
 		applescriptString(message), applescriptString(title))
-	_ = exec.Command("/usr/bin/osascript", "-e", script).Start()
-}
-
-// runDoctor opens the checks in a terminal, because the answer is a page of
-// text with commands to copy, which a notification cannot carry.
-func (a *app) runDoctor() {
-	script := `tell application "Terminal"
-	activate
-	do script "vpnctl doctor"
-end tell`
 	_ = exec.Command("/usr/bin/osascript", "-e", script).Start()
 }
 

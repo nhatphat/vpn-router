@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 
@@ -47,7 +48,7 @@ func statusCmd(args []string) error {
 		return nil
 	}
 
-	return client(*socketPath).Stream(ipc.Request{Op: ipc.OpStatusStream}, func(r *ipc.Response) bool {
+	return client(*socketPath).Stream(context.Background(), ipc.Request{Op: ipc.OpStatusStream}, func(r *ipc.Response) bool {
 		if r.Status != nil {
 			fmt.Println()
 			print(r.Status)
@@ -87,7 +88,7 @@ func logsCmd(args []string) error {
 		return nil
 	}
 
-	return client(*socketPath).Stream(req, func(r *ipc.Response) bool {
+	return client(*socketPath).Stream(context.Background(), req, func(r *ipc.Response) bool {
 		for _, e := range r.Entries {
 			printEntry(e)
 		}

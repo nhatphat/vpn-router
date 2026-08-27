@@ -18,14 +18,21 @@
     }
   }
   * { box-sizing: border-box; }
+  /* Stated once and loudly: a panel is hidden by the attribute, and half the
+     things hidden here carry a display of their own that would outrank it. */
+  [hidden] { display: none !important; }
+
+  /* The page is one screen, not a document: status and tabs are fixed chrome,
+     and each tab scrolls inside itself. Nothing a tab does can move anything
+     in the other one, which is what a shared page scroll kept doing. */
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 13px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
   }
-  header {
-    position: sticky; top: 0; z-index: 2; background: var(--panel);
-    border-bottom: 1px solid var(--line); padding: 12px 16px;
-  }
+  header { border-bottom: 1px solid var(--line); padding: 12px 16px; background: var(--panel); }
+  .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .overall { display: flex; align-items: baseline; gap: 10px; }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .dot.green { background: var(--green); } .dot.yellow { background: var(--yellow); }
@@ -42,8 +49,9 @@
   .controls {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
     padding: 10px 16px; border-bottom: 1px solid var(--line);
+    background: var(--panel);
   }
-  select, input[type=search], button {
+  select, input[type=search], input[type=text], button {
     font: inherit; color: var(--text); background: var(--panel);
     border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
   }
@@ -51,7 +59,10 @@
   button { cursor: pointer; }
   button.on { border-color: var(--accent); color: var(--accent); }
   label { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); }
-  #log { font-family: var(--mono); font-size: 12px; padding: 8px 16px 40vh; }
+  #log {
+    flex: 1; min-height: 0; overflow-y: auto;
+    font-family: var(--mono); font-size: 12px; padding: 8px 16px 16px;
+  }
   .row { display: flex; gap: 10px; padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
   .row .ts { color: var(--dim); flex: none; }
   .row .src { flex: none; width: 82px; color: var(--accent); }
@@ -60,15 +71,63 @@
   .row.error .msg { color: var(--red); }
   .row .count { color: var(--dim); }
   .empty { color: var(--dim); padding: 16px; }
-  .resolvers { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .resolvers .label { color: var(--dim); font-size: 12px; }
-  .pill {
-    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
-    border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
-    font-family: var(--mono);
+  .note { color: var(--yellow); }
+  /* Tabs: the log is what the page is for, so it stays the landing tab and
+     the editor is one click away rather than crowded in beside it. */
+  .tabs {
+    display: flex; gap: 4px; padding: 0 16px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
   }
-  .pill.off { color: var(--dim); }
-  .pill .note { color: var(--yellow); font-family: inherit; }
+  .tab {
+    /* The shared control styling rounds every button; an underline with
+       rounded ends reads as a stray shape rather than a selected tab. */
+    font: inherit; color: var(--dim); background: none; border: 0; border-radius: 0;
+    /* Overlapping the row's own line, so the selected tab sits on it rather
+       than under a second one. */
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 8px 10px; cursor: pointer;
+  }
+  .tab.on { color: var(--text); border-bottom-color: var(--accent); }
+  /* A clicked tab keeps focus, and a ring left sitting under it reads as part
+     of the design. Keyboard focus still shows, because there it is the only
+     thing saying where you are. */
+  .tab:focus { outline: none; }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  #rules { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+  #rules .inner { max-width: 900px; }
+  #rules h2 {
+    font-size: 13px; font-weight: 600; margin: 0 0 4px;
+  }
+  #rules .about { color: var(--dim); font-size: 12px; margin: 0 0 12px; }
+  #rules section + section { margin-top: 28px; }
+
+  table.list { border-collapse: collapse; width: 100%; }
+  table.list th {
+    text-align: left; font-weight: 400; color: var(--dim); font-size: 12px;
+    padding: 0 8px 6px 0; border-bottom: 1px solid var(--line);
+  }
+  table.list td {
+    padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  table.list td.type { width: 190px; color: var(--dim); font-family: var(--mono); font-size: 12px; }
+  table.list td.value { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  table.list td.act { width: 1%; white-space: nowrap; text-align: right; }
+  table.list tr.advanced td.value { color: var(--dim); }
+  table.list input[type=text], table.list select { width: 100%; }
+  table.list td.type select { width: 100%; }
+
+  .rowbutton {
+    font: inherit; font-size: 12px; color: var(--dim); background: none;
+    border: 1px solid transparent; border-radius: 6px; padding: 2px 8px; cursor: pointer;
+  }
+  .rowbutton:hover { border-color: var(--line); color: var(--text); }
+  .rowbutton.danger:hover { color: var(--red); }
+  .rowbutton.go { color: var(--accent); }
+
+  .empty.list { padding: 12px 0; }
+  .problem { color: var(--red); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -79,9 +138,14 @@
     <span id="meta" class="meta"></span>
   </div>
   <div class="components" id="components"></div>
-  <div class="resolvers" id="resolvers"></div>
 </header>
 
+<nav class="tabs">
+  <button class="tab on" id="tabLogs">logs</button>
+  <button class="tab" id="tabRules">rules</button>
+</nav>
+
+<div class="panel" id="logsPanel">
 <div class="controls">
   <label>source
     <select id="source">
@@ -96,6 +160,33 @@
 </div>
 
 <div id="log"><div class="empty">waiting for the daemon…</div></div>
+</div>
+
+<div id="rules" hidden>
+  <div class="inner">
+  <section>
+    <h2>forced through VPN</h2>
+    <p class="about">
+      Destinations that must never be reached directly, whatever the racer
+      decides. Matching is by <code>Host</code> and TLS/QUIC SNI for domains,
+      and by executable for processes. sing-box reloads this file itself, so
+      nothing needs restarting.
+    </p>
+    <div id="forcedTable"></div>
+  </section>
+
+  <section>
+    <h2>scoped resolvers</h2>
+    <p class="about">
+      Suffixes macOS resolves through vpnctl, by way of a file in
+      <code>/etc/resolver</code>. Switching one off removes that file and keeps
+      the entry; removing it takes the entry out of the config too. Each change
+      is applied by the daemon straight away.
+    </p>
+    <div id="resolverTable"></div>
+  </section>
+  </div>
+</div>
 
 <script>
 const TOKEN = "{{.Token}}";
@@ -109,44 +200,170 @@ let following = true;
 let entries = [];
 let logStream = null;
 
+// Which tab is up, and whether the log has entries it has not drawn because of
+// that. Declared here because render() is reached from the stream.
+let currentTab = "logs";
+let logStale = false;
+
 followEl.onclick = () => {
-  following = !following;
+  setFollowing(!following);
+  if (following) scrollToEnd();
+};
+
+// The button and the scroll position are one state, not two: scrolling up to
+// read something is the same instruction as pressing pause, and nothing is
+// more irritating than a log that yanks itself back down while you read.
+function setFollowing(on) {
+  following = on;
   followEl.classList.toggle("on", following);
   followEl.textContent = following ? "following" : "paused";
-  if (following) scrollToEnd();
+}
+
+logEl.onscroll = () => {
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 20;
+  if (atBottom !== following) setFollowing(atBottom);
 };
 document.getElementById("clear").onclick = () => { entries = []; render(); };
 filterEl.oninput = render;
 sourceEl.onchange = openLogStream;
 
-function scrollToEnd() { window.scrollTo(0, document.body.scrollHeight); }
+// The log scrolls inside its own box, so this cannot disturb anything else on
+// the page — least of all a tab that is not on screen.
+function scrollToEnd() { logEl.scrollTop = logEl.scrollHeight; }
 
+function time(ts) { return new Date(ts).toLocaleTimeString(); }
+
+// Still needed by the component panel, which is built as markup: it redraws
+// only when the daemon's status changes, where a string is the simpler thing.
 function esc(s) {
   return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
-function time(ts) { return new Date(ts).toLocaleTimeString(); }
+// A log that redraws itself entirely for every arriving line spends half a
+// second per line once it is holding five thousand of them — measured, not
+// guessed — and a line arrives whenever the racer says anything. So the
+// entries the page already drew stay drawn: one line in means one row
+// appended, or one row updated where the daemon folded a repeat into a count.
+//
+// Everything that changes what the whole list should say — a filter, a source,
+// a clear, coming back to this tab — still rebuilds it, because there the work
+// is proportional to the change.
+const MAX_ENTRIES = 5000;
+const rows = new Map();
 
+function keep(e, needle) {
+  if (!needle) return true;
+  return e.msg.toLowerCase().includes(needle) || e.source.includes(needle);
+}
+
+function rowElement(e) {
+  const row = document.createElement("div");
+  const ts = document.createElement("span");
+  const src = document.createElement("span");
+  const msg = document.createElement("span");
+
+  ts.className = "ts";
+  src.className = "src";
+  msg.className = "msg";
+  row.append(ts, src, msg);
+
+  fillRow(row, e);
+  return row;
+}
+
+function fillRow(row, e) {
+  const [ts, src, msg] = row.children;
+  row.className = "row " + e.level;
+  ts.textContent = time(e.ts);
+  src.textContent = e.source;
+  msg.textContent = e.msg;
+
+  if (e.count > 1) {
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = ` (x${e.count})`;
+    msg.appendChild(count);
+  }
+}
+
+function dropRow(seq) {
+  const row = rows.get(seq);
+  if (row) {
+    row.remove();
+    rows.delete(seq);
+  }
+}
+
+function updateCount() {
+  countEl.textContent = rows.size === entries.length
+    ? `${entries.length} entries`
+    : `${rows.size} of ${entries.length} entries`;
+}
+
+// render rebuilds the list from scratch.
 function render() {
-  const needle = filterEl.value.toLowerCase();
-  const rows = [];
-  let shown = 0;
+  // Nothing to draw into while the other tab is up. Rebuilding thousands of
+  // rows nobody can see was most of what made the page feel busy.
+  if (currentTab !== "logs") {
+    logStale = true;
+    return;
+  }
+  logStale = false;
 
+  const needle = filterEl.value.toLowerCase();
+  const fragment = document.createDocumentFragment();
+
+  rows.clear();
   for (const e of entries) {
-    if (needle && !e.msg.toLowerCase().includes(needle) && !e.source.includes(needle)) continue;
-    shown++;
-    const count = e.count > 1 ? ` <span class="count">(x${e.count})</span>` : "";
-    rows.push(
-      `<div class="row ${esc(e.level)}"><span class="ts">${time(e.ts)}</span>` +
-      `<span class="src">${esc(e.source)}</span>` +
-      `<span class="msg">${esc(e.msg)}${count}</span></div>`
-    );
+    if (!keep(e, needle)) continue;
+    const row = rowElement(e);
+    rows.set(e.seq, row);
+    fragment.appendChild(row);
   }
 
-  logEl.innerHTML = rows.length ? rows.join("") : '<div class="empty">nothing matches</div>';
-  countEl.textContent = shown === entries.length
-    ? `${entries.length} entries`
-    : `${shown} of ${entries.length} entries`;
+  logEl.textContent = "";
+  if (rows.size) {
+    logEl.appendChild(fragment);
+  } else {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = entries.length ? "nothing matches" : "waiting for the daemon…";
+    logEl.appendChild(empty);
+  }
+
+  updateCount();
+  if (following) scrollToEnd();
+}
+
+// draw puts one arrived entry on screen, wherever it belongs.
+function draw(e) {
+  if (currentTab !== "logs") {
+    logStale = true;
+    return;
+  }
+
+  const needle = filterEl.value.toLowerCase();
+  const existing = rows.get(e.seq);
+
+  if (!keep(e, needle)) {
+    // A folded repeat can stop matching a filter that its earlier text met.
+    if (existing) dropRow(e.seq);
+    updateCount();
+    return;
+  }
+
+  if (existing) {
+    fillRow(existing, e);
+  } else {
+    if (!rows.size) logEl.textContent = "";
+    const row = rowElement(e);
+    rows.set(e.seq, row);
+    // Entries arrive in order, and a fold updates in place, so the end is
+    // always where a new one goes.
+    logEl.appendChild(row);
+  }
+
+  updateCount();
   if (following) scrollToEnd();
 }
 
@@ -156,8 +373,11 @@ function upsert(entry) {
   for (let i = entries.length - 1; i >= 0; i--) {
     if (entries[i].seq === entry.seq) { entries[i] = entry; return; }
   }
+
   entries.push(entry);
-  if (entries.length > 5000) entries.splice(0, entries.length - 5000);
+  if (entries.length > MAX_ENTRIES) {
+    for (const old of entries.splice(0, entries.length - MAX_ENTRIES)) dropRow(old.seq);
+  }
 }
 
 function openLogStream() {
@@ -168,11 +388,17 @@ function openLogStream() {
   const src = sourceEl.value ? `&source=${encodeURIComponent(sourceEl.value)}` : "";
   logStream = new EventSource(`/events/logs?t=${TOKEN}${src}`);
 
+  // A batch is the backlog, which is worth one rebuild; an entry is one line,
+  // which is worth one row.
   logStream.addEventListener("batch", ev => {
     for (const e of JSON.parse(ev.data)) upsert(e);
     render();
   });
-  logStream.addEventListener("entry", ev => { upsert(JSON.parse(ev.data)); render(); });
+  logStream.addEventListener("entry", ev => {
+    const entry = JSON.parse(ev.data);
+    upsert(entry);
+    draw(entry);
+  });
   logStream.addEventListener("error", () => {
     // EventSource reconnects on its own; say so rather than looking dead.
     countEl.textContent = "reconnecting…";
@@ -203,26 +429,378 @@ function renderStatus(s) {
   }).join("");
 }
 
-// A tick is not enough on its own: a suffix can be on in the config with no
-// resolver file installed, or off while a file somebody else wrote still sends
-// those names here. Say which, rather than implying intent equals effect.
+// ---------------------------------------------------------------- tabs ----
+// Two panels that share nothing but the status header above them. Each keeps
+// its own scroll position, and neither redraws while the other is up.
+const panels = {
+  logs: [document.getElementById("tabLogs"), document.getElementById("logsPanel")],
+  rules: [document.getElementById("tabRules"), document.getElementById("rules")],
+};
+
+let logScroll = 0;
+
+function showTab(name) {
+  if (!panels[name]) name = "logs";
+  if (currentTab === "logs" && name !== "logs") logScroll = logEl.scrollTop;
+  currentTab = name;
+
+  for (const [key, [button, panel]] of Object.entries(panels)) {
+    button.classList.toggle("on", key === name);
+    panel.hidden = key !== name;
+  }
+  try { localStorage.setItem("vpnctl.tab", name); } catch (e) {}
+
+  // Each tab catches up on what it missed while it was away: the log on the
+  // entries it did not draw, the rules on a file that may have changed under
+  // it — by an editor, or by vpnctl on the command line.
+  if (name === "logs") {
+    if (logStale) render();
+    // Hiding a box can lose where it was scrolled to, and a paused log that
+    // jumps to the top has thrown away the line somebody paused to read.
+    if (following) scrollToEnd(); else logEl.scrollTop = logScroll;
+  } else {
+    loadForced();
+    renderResolverTable();
+  }
+}
+
+for (const [name, [button]] of Object.entries(panels)) button.onclick = () => showTab(name);
+
+// ------------------------------------------------------- editable tables ---
+// Both tables are the same shape: rows that can be edited in place, and one
+// row at the bottom that adds. Only what a row means differs.
+function actionButton(label, title, run, kind) {
+  const button = document.createElement("button");
+  button.className = "rowbutton" + (kind ? " " + kind : "");
+  button.textContent = label;
+  button.title = title || "";
+  button.onclick = run;
+  return button;
+}
+
+function table(headings) {
+  const el = document.createElement("table");
+  el.className = "list";
+
+  const head = document.createElement("tr");
+  for (const heading of headings) {
+    const th = document.createElement("th");
+    th.textContent = heading;
+    head.appendChild(th);
+  }
+
+  el.appendChild(head);
+  return el;
+}
+
+function cell(row, className) {
+  const td = document.createElement("td");
+  if (className) td.className = className;
+  row.appendChild(td);
+  return td;
+}
+
+function problemText(message) {
+  const problem = document.createElement("p");
+  problem.className = "problem";
+  problem.textContent = message;
+  return problem;
+}
+
+// commitOnEnter wires the one editing convention both tables use: Enter is
+// yes, Escape is no, and a field left as it was is no either.
+function commitOnEnter(input, was, commit, cancel) {
+  input.onkeydown = ev => {
+    if (ev.key === "Escape") { cancel(); return; }
+    if (ev.key !== "Enter") return;
+
+    const typed = input.value.trim();
+    if (typed && typed !== was) commit(typed); else cancel();
+  };
+}
+
+// ------------------------------------------------- forced through VPN ------
+// Read from the rules file rather than from the status stream, because nothing
+// in the stack is told when that file changes: sing-box watches it itself.
+const forcedTable = document.getElementById("forcedTable");
+
+let forced = { rules: [], advanced: [], types: [], editable: false, error: "" };
+let addingRule = false;
+let editingRule = null;
+
+async function loadForced() {
+  try {
+    const resp = await fetch(`/rules?t=${TOKEN}`);
+    forced = await resp.json();
+  } catch (e) {
+    forced = { rules: [], advanced: [], types: [], editable: false, error: String(e) };
+  }
+  renderForced();
+}
+
+// Every reply carries the whole list, so the page never has to guess what the
+// file ended up saying.
+async function ruleOp(op, type, value, to) {
+  addingRule = false;
+  editingRule = null;
+  try {
+    const resp = await fetch(`/rules?t=${TOKEN}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op, type, value, to }),
+    });
+    forced = await resp.json();
+  } catch (e) {
+    forced.error = String(e);
+  }
+  renderForced();
+}
+
+function typeSelect(selected) {
+  const select = document.createElement("select");
+  for (const type of forced.types) {
+    const option = document.createElement("option");
+    option.value = type;
+    option.textContent = type;
+    option.selected = type === selected;
+    select.appendChild(option);
+  }
+  return select;
+}
+
+function renderForced() {
+  forcedTable.textContent = "";
+
+  const el = table(["match on", "value", ""]);
+
+  for (const rule of forced.rules) {
+    const key = rule.type + " " + rule.value;
+    const row = document.createElement("tr");
+
+    cell(row, "type").textContent = rule.type;
+
+    if (editingRule === key) {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = rule.value;
+      input.spellcheck = false;
+      cell(row, "value").appendChild(input);
+
+      const stop = () => { editingRule = null; renderForced(); };
+      commitOnEnter(input, rule.value, typed => ruleOp("edit", rule.type, rule.value, typed), stop);
+      cell(row, "act").appendChild(actionButton("cancel", "", stop));
+
+      el.appendChild(row);
+      queueMicrotask(() => { input.focus(); input.select(); });
+      continue;
+    }
+
+    cell(row, "value").textContent = rule.value;
+
+    const act = cell(row, "act");
+    if (forced.editable) {
+      act.appendChild(actionButton("edit", "", () => { editingRule = key; renderForced(); }));
+      act.appendChild(actionButton("remove", `stop forcing ${rule.value}`, () => {
+        if (confirm(`Stop forcing ${rule.type} ${rule.value} through the VPN?`)) {
+          ruleOp("remove", rule.type, rule.value);
+        }
+      }, "danger"));
+    }
+    el.appendChild(row);
+  }
+
+  // Rules that AND several fields mean something no row here can say, so they
+  // are shown as they are rather than flattened into something editable and
+  // wrong.
+  for (const advanced of forced.advanced) {
+    const row = document.createElement("tr");
+    row.className = "advanced";
+    cell(row, "type").textContent = "several conditions";
+    cell(row, "value").textContent = advanced;
+    cell(row, "act").textContent = "edit the file";
+    el.appendChild(row);
+  }
+
+  if (forced.editable) el.appendChild(addRuleRow());
+  forcedTable.appendChild(el);
+
+  if (!forced.rules.length && !forced.advanced.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty list";
+    empty.textContent = "nothing is forced through the VPN";
+    forcedTable.appendChild(empty);
+  }
+  if (forced.error) forcedTable.appendChild(problemText(forced.error));
+}
+
+function addRuleRow() {
+  const row = document.createElement("tr");
+
+  if (!addingRule) {
+    const td = cell(row, "type");
+    td.colSpan = 3;
+    td.appendChild(actionButton("+ add a rule", "", () => { addingRule = true; renderForced(); }, "go"));
+    return row;
+  }
+
+  const select = typeSelect("domain_suffix");
+  cell(row, "type").appendChild(select);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.spellcheck = false;
+  cell(row, "value").appendChild(input);
+
+  // The placeholder is the only hint about what a matcher wants, and what
+  // they want differs enough that one example for all of them would mislead.
+  const examples = {
+    domain_suffix: "customer.example",
+    domain: "exact.customer.example",
+    domain_keyword: "customer",
+    domain_regex: "^api\\..*\\.example$",
+    process_name: "CustomerApp",
+    process_path: "/Applications/CustomerApp.app/Contents/MacOS/CustomerApp",
+    process_path_regex: "^/Applications/CustomerApp\\.app/.*",
+  };
+  input.placeholder = examples.domain_suffix;
+  select.onchange = () => { input.placeholder = examples[select.value] || ""; };
+
+  const stop = () => { addingRule = false; renderForced(); };
+  commitOnEnter(input, "", typed => ruleOp("add", select.value, typed), stop);
+
+  const act = cell(row, "act");
+  act.appendChild(actionButton("add", "", () => {
+    const typed = input.value.trim();
+    if (typed) ruleOp("add", select.value, typed); else stop();
+  }, "go"));
+  act.appendChild(actionButton("cancel", "", stop));
+
+  queueMicrotask(() => input.focus());
+  return row;
+}
+
+// ------------------------------------------------------ scoped resolvers ---
+// The list comes from the status stream, notes and all: a second copy served
+// from the page would be a second answer to the same question. Editing writes
+// the config and asks the daemon to apply it, so nothing here touches the rows
+// directly — the stream reports what actually happened.
+const EDIT_RESOLVERS = {{if .EditResolvers}}true{{else}}false{{end}};
+const resolverTable = document.getElementById("resolverTable");
+
+let resolvers = [];
+let resolverError = "";
+let addingResolver = false;
+
+function resolverNote(r) {
+  if (r.foreign) return "foreign file";
+  if (r.enabled && !r.installed) return "not installed";
+  if (!r.enabled && r.installed) return "still installed";
+  return "";
+}
+
+// renderResolvers is what the status stream calls. There is one view of this
+// list now — the table on the rules tab — so this only records what the daemon
+// said and lets that view redraw.
 function renderResolvers(list) {
-  const el = document.getElementById("resolvers");
-  if (!list.length) { el.innerHTML = ""; return; }
+  resolvers = list;
+  if (currentTab === "rules") renderResolverTable();
+}
 
-  const pills = list.map(r => {
-    let note = "";
-    if (r.foreign) note = "foreign file";
-    else if (r.enabled && !r.installed) note = "not installed";
-    else if (!r.enabled && r.installed) note = "still installed";
+function renderResolverTable() {
+  resolverTable.textContent = "";
 
-    const dot = r.enabled ? "green" : "unknown";
-    return `<span class="pill ${r.enabled ? "" : "off"}">` +
-      `<span class="dot ${dot}"></span>${esc(r.domain)}` +
-      (note ? ` <span class="note">${esc(note)}</span>` : "") + `</span>`;
-  });
+  const el = table(["domain", "state", ""]);
 
-  el.innerHTML = `<span class="label">scoped resolvers</span>` + pills.join("");
+  for (const r of resolvers) {
+    const row = document.createElement("tr");
+    cell(row, "value").textContent = r.domain;
+
+    const state = cell(row, "type");
+    state.textContent = r.enabled ? "on" : "off";
+
+    const note = resolverNote(r);
+    if (note) {
+      const why = document.createElement("span");
+      why.className = "note";
+      why.textContent = "  " + note;
+      state.appendChild(why);
+    }
+
+    const act = cell(row, "act");
+    if (EDIT_RESOLVERS) {
+      act.appendChild(actionButton(r.enabled ? "switch off" : "switch on", "",
+        () => resolverOp("toggle", r.domain, !r.enabled)));
+      act.appendChild(actionButton("remove", "", () => {
+        if (confirm(`Remove ${r.domain} from the scoped resolvers?`)) {
+          resolverOp("remove", r.domain);
+        }
+      }, "danger"));
+    }
+    el.appendChild(row);
+  }
+
+  if (EDIT_RESOLVERS) el.appendChild(addResolverRow());
+  resolverTable.appendChild(el);
+
+  if (!resolvers.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty list";
+    empty.textContent = "no scoped resolver domains";
+    resolverTable.appendChild(empty);
+  }
+  if (resolverError) resolverTable.appendChild(problemText(resolverError));
+}
+
+function addResolverRow() {
+  const row = document.createElement("tr");
+
+  if (!addingResolver) {
+    const td = cell(row, "value");
+    td.colSpan = 3;
+    td.appendChild(actionButton("+ add a domain", "", () => {
+      addingResolver = true;
+      renderResolverTable();
+    }, "go"));
+    return row;
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.spellcheck = false;
+  input.placeholder = "corp.example.com";
+  cell(row, "value").appendChild(input);
+  cell(row, "type");
+
+  const stop = () => { addingResolver = false; renderResolverTable(); };
+  commitOnEnter(input, "", typed => resolverOp("add", typed), stop);
+
+  const act = cell(row, "act");
+  act.appendChild(actionButton("add", "", () => {
+    const typed = input.value.trim();
+    if (typed) resolverOp("add", typed); else stop();
+  }, "go"));
+  act.appendChild(actionButton("cancel", "", stop));
+
+  queueMicrotask(() => input.focus());
+  return row;
+}
+
+// Nothing comes back but a verdict: the rows redraw when the daemon says the
+// change took, not when the page asked for it.
+async function resolverOp(op, domain, enabled) {
+  resolverError = "";
+  addingResolver = false;
+  try {
+    const resp = await fetch(`/resolvers?t=${TOKEN}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op, domain, enabled: !!enabled }),
+    });
+    resolverError = (await resp.json()).error || "";
+  } catch (e) {
+    resolverError = String(e);
+  }
+  renderResolverTable();
 }
 
 function openStatusStream() {
@@ -233,6 +811,10 @@ function openStatusStream() {
     document.getElementById("reason").textContent = "daemon unreachable";
   });
 }
+
+let startTab = "logs";
+try { startTab = localStorage.getItem("vpnctl.tab") || "logs"; } catch (e) {}
+showTab(startTab);
 
 openStatusStream();
 openLogStream();

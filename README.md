@@ -122,19 +122,36 @@ None of these need `sudo` except `update`.
 
 **The menu bar** is installed by default and starts at login. It shows the state
 as `✅ VPN`, `⚠️ VPN`, `❌ VPN` or `⏸️ VPN`; stops and starts the stack, restarts
-any component, applies an edited config, switches scoped resolver domains on and
-off, and opens the log page. **Quit menu bar** quits only the menu bar — the
-daemon and the tunnel keep running, which is why it is not called "Quit" — so
-bring it back with `vpnctl menubar -start` or by logging in again.
+any component, applies an edited config, and opens the log page. It lists the
+scoped resolver domains and the force-VPN rules to glance at; both are edited on
+the log page's rules tab, which can hold more than a fixed pool of menu items. It has no Quit item: quitting it would leave the
+daemon and the tunnel running behind an empty menu bar. If it is ever not on
+screen, `vpnctl menubar -start` brings it back.
 Notifications appear only when the overall state *changes*, because one every
 ten seconds would teach you to ignore them.
 
-**Open logs…** serves a live page: the component panel at the top, one merged
-filterable log below, streamed as it happens. It is served by the menu bar
+**Open logs…** serves a live page: the component panel at the top, and two
+tabs below it — **logs**, one merged filterable stream as it happens, and
+**rules**, where the force-VPN rules and the scoped resolver domains are
+edited. It is served by the menu bar
 process as you, not by the daemon — an HTTP listener cannot tell one local
 caller from another, so putting one in a root service would hand every process
 on the machine a window into it. The URL carries a random token for the same
 reason.
+
+No listener exists until the first time you open it, and none survives five
+minutes of nobody looking: closing the tab releases both of its streams at
+once, and the port goes back shortly after. Opening it again is a new page with
+a new URL, so a link kept from last time will not work — the menu bar item is
+the way back. A tab left open counts as looking, however quiet it is, and a
+reload or a laptop waking up is far too short to end anything.
+
+The rules tab is the only part of the page that writes. Both change how this
+machine routes and resolves, so they take more than the token: `POST` only,
+refused unless it comes from the page itself, so that no other site — and no
+name pointed at `127.0.0.1` — can edit your routing through a browser you
+happen to have open. Every edit is logged to the menu bar's stderr, which
+launchd keeps.
 
 **`stop` and `start`** switch everything off and on without removing anything.
 Wanting the machine's own routing back for an hour is an ordinary thing to want,
@@ -200,6 +217,22 @@ because a TUN connection arrives with only a destination address. Process rules
 cover TCP and UDP, so a matched application fails closed rather than falling
 back to direct when the VPN is down.
 
+This file can be edited without opening it, on the **rules** tab of the log
+page: one row per matcher, with the type beside it, and `+ add a rule` to write
+another. The types offered are `domain_suffix`, `domain`, `domain_keyword`,
+`domain_regex`, `process_name`, `process_path` and `process_path_regex`. Values
+are checked as the type demands — a domain accepts a pasted URL or a
+`*.example` wildcard and is reduced to the suffix, a regex is stored exactly as
+typed but must compile, a process path must be absolute.
+
+A rule that ANDs several fields means something no row can say, so it is listed
+as it stands and left to the file. The menu bar shows the same list under
+**Force through VPN**, to glance at.
+
+Only rule objects holding a single matcher are touched. Anything else written
+here by hand is left exactly as it is. Nothing needs restarting afterwards,
+since sing-box reloads the file itself.
+
 ### Scoped resolver domains
 
 Naming a suffix here tells macOS to resolve it here, by way of a file in
@@ -212,6 +245,13 @@ dns_router:
     - domain: staging.example.com
       enabled: false
 ```
+
+The **rules** tab on the log page edits this list too, below the force-VPN
+rules. Switching a domain off leaves it in the file to switch back on and
+removes its `/etc/resolver` file; removing it takes the line out altogether.
+Each change is written to the config and applied by the daemon straight away,
+and the rows redraw from the daemon's own status — so a change that saved but
+would not apply says so instead of looking done.
 
 A bare name is on; the mapping form keeps a suffix declared but switched off.
 Three equivalent ways to change it: edit the config and `vpnctl reload`, run

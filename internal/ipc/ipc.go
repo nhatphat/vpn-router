@@ -11,6 +11,7 @@ package ipc
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -310,7 +311,7 @@ func (c *Client) Do(req Request) (*Response, error) {
 
 // Stream sends one request and calls onResponse for every reply until the
 // connection closes or onResponse returns false.
-func (c *Client) Stream(req Request, onResponse func(*Response) bool) error {
+func (c *Client) Stream(ctx context.Context, req Request, onResponse func(*Response) bool) error {
 	conn, err := c.dial()
 	if err != nil {
 		return err
@@ -321,11 +322,33 @@ func (c *Client) Stream(req Request, onResponse func(*Response) bool) error {
 		return err
 	}
 
+	// A caller that has stopped caring — a browser tab that was closed, most
+	// of all — cannot be noticed from here: this loop is blocked reading, and
+	// a status stream on a machine where nothing is going wrong says nothing
+	// for hours. Closing the connection under the read is what ends it, and
+	// the daemon then sees EOF and drops its own end.
+	// Background and TODO have no Done channel, and want no watchdog: those
+	// callers stream for as long as their process does.
+	if ctx.Done() != nil {
+		returned := make(chan struct{})
+		defer close(returned)
+
+		go func() {
+			select {
+			case <-ctx.Done():
+				conn.Close()
+			case <-returned:
+			}
+		}()
+	}
+
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	for {
 		var resp Response
 		if err := dec.Decode(&resp); err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || ctx.Err() != nil {
+				// Cancelled is not failed: the read broke because this side
+				// closed the socket on purpose.
 				return nil
 			}
 			return err

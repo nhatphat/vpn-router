@@ -177,15 +177,37 @@ func nextNonBlank(lines []string, from int) int {
 }
 
 // ToggleResolverDomain flips one domain in the file at path and returns the
-// new list. It re-reads the file first, so an edit made in an editor since the
-// caller last looked is not clobbered by a stale copy.
+// new list.
 func ToggleResolverDomain(path, domain string, enabled bool) (ResolverDomains, error) {
+	return editResolverDomains(path, func(list ResolverDomains) (ResolverDomains, error) {
+		return list.WithToggled(domain, enabled)
+	})
+}
+
+// AddResolverDomain adds a suffix for macOS to resolve here, switched on.
+func AddResolverDomain(path, domain string) (ResolverDomains, error) {
+	return editResolverDomains(path, func(list ResolverDomains) (ResolverDomains, error) {
+		return list.WithAdded(domain)
+	})
+}
+
+// RemoveResolverDomain takes a suffix out of the list altogether. Switching
+// one off leaves it in the file to switch back on; removing it does not.
+func RemoveResolverDomain(path, domain string) (ResolverDomains, error) {
+	return editResolverDomains(path, func(list ResolverDomains) (ResolverDomains, error) {
+		return list.WithRemoved(domain)
+	})
+}
+
+// editResolverDomains re-reads the file before changing it, so an edit made in
+// an editor since the caller last looked is not clobbered by a stale copy.
+func editResolverDomains(path string, change func(ResolverDomains) (ResolverDomains, error)) (ResolverDomains, error) {
 	cfg, err := Load(path)
 	if err != nil {
 		return nil, err
 	}
 
-	next, err := cfg.DNSRouter.ResolverDomains.WithToggled(domain, enabled)
+	next, err := change(cfg.DNSRouter.ResolverDomains)
 	if err != nil {
 		return nil, err
 	}

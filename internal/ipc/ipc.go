@@ -24,6 +24,7 @@ import (
 
 	"vpn-router/internal/logbus"
 	"vpn-router/internal/status"
+	"vpn-router/internal/trace"
 )
 
 // DefaultSocket is under /var/run, which the daemon can write and clients can
@@ -47,6 +48,13 @@ const (
 	OpPause        Op = "pause"
 	OpResume       Op = "resume"
 	OpVersion      Op = "version"
+	// OpTrace reports what the destination trace has collected; OpTraceStart
+	// and OpTraceStop turn it on and off. Starting and stopping both restart
+	// sing-box, so they are separate verbs rather than one toggle whose
+	// meaning depends on state the caller cannot see.
+	OpTrace      Op = "trace"
+	OpTraceStart Op = "trace-start"
+	OpTraceStop  Op = "trace-stop"
 )
 
 // Request is the whole client vocabulary.
@@ -71,6 +79,7 @@ type Response struct {
 	Entry   *logbus.Entry        `json:"entry,omitempty"`
 	Reload  *status.ReloadResult `json:"reload,omitempty"`
 	Version string               `json:"version,omitempty"`
+	Trace   *trace.State         `json:"trace,omitempty"`
 }
 
 // Backend is what the daemon implements for the server to expose.
@@ -84,6 +93,9 @@ type Backend interface {
 	SubscribeLogs(buffer int) (<-chan logbus.Entry, func())
 	SubscribeStatus(buffer int) (<-chan status.Snapshot, func())
 	Version() string
+	TraceState() *trace.State
+	StartTrace() (*trace.State, error)
+	StopTrace() (*trace.State, error)
 }
 
 type Server struct {
@@ -199,6 +211,25 @@ func (s *Server) handle(conn net.Conn, done <-chan struct{}) {
 			return
 		}
 		_ = enc.Encode(Response{OK: true, Reload: result})
+
+	case OpTrace:
+		_ = enc.Encode(Response{OK: true, Trace: s.Backend.TraceState()})
+
+	case OpTraceStart:
+		st, err := s.Backend.StartTrace()
+		if err != nil {
+			_ = enc.Encode(Response{Error: err.Error()})
+			return
+		}
+		_ = enc.Encode(Response{OK: true, Trace: st})
+
+	case OpTraceStop:
+		st, err := s.Backend.StopTrace()
+		if err != nil {
+			_ = enc.Encode(Response{Error: err.Error()})
+			return
+		}
+		_ = enc.Encode(Response{OK: true, Trace: st})
 
 	case OpRestart:
 		if err := s.Backend.Restart(req.Component); err != nil {

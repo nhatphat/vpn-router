@@ -69,6 +69,10 @@ type Bus struct {
 
 	subs   map[int]chan Entry
 	nextID int
+
+	// tap, when set, is offered every message before it is published and may
+	// consume it. See SetTap.
+	tap func(Source, Level, string) bool
 }
 
 func New(capacity int) *Bus {
@@ -102,9 +106,30 @@ func dedupeKey(src Source, lvl Level, msg string) string {
 	return string(src) + "\x00" + string(lvl) + "\x00" + connIDRe.ReplaceAllString(msg, "[]")
 }
 
+// SetTap installs a function offered every message before it is published, or
+// removes one when f is nil. A tap that returns true consumes the message: it
+// reaches neither the ring, nor a subscriber, nor the log file.
+//
+// It exists so a component can fold a class of high-volume lines into
+// something smaller than the lines themselves — see internal/trace. A tap runs
+// while the bus lock is not held but on the publishing goroutine, so it must
+// be quick and must not publish, which would deadlock on itself.
+func (b *Bus) SetTap(f func(src Source, lvl Level, msg string) bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tap = f
+}
+
 func (b *Bus) Publish(src Source, lvl Level, msg string) {
 	msg = strings.TrimRight(StripANSI(msg), "\r\n")
 	if msg == "" {
+		return
+	}
+
+	b.mu.Lock()
+	tap := b.tap
+	b.mu.Unlock()
+	if tap != nil && tap(src, lvl, msg) {
 		return
 	}
 

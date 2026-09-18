@@ -11,6 +11,7 @@ import (
 
 	"vpn-router/internal/logbus"
 	"vpn-router/internal/status"
+	"vpn-router/internal/trace"
 )
 
 type stubBackend struct {
@@ -74,6 +75,16 @@ func (b *stubBackend) SetPaused(paused bool) error {
 }
 
 func (b *stubBackend) Version() string { return "test" }
+
+func (b *stubBackend) TraceState() *trace.State { return &trace.State{Rows: []trace.Row{}} }
+
+func (b *stubBackend) StartTrace() (*trace.State, error) {
+	return &trace.State{Active: true, Rows: []trace.Row{}}, nil
+}
+
+func (b *stubBackend) StopTrace() (*trace.State, error) {
+	return &trace.State{Rows: []trace.Row{}}, nil
+}
 
 func serve(t *testing.T, backend Backend) *Client {
 	t.Helper()

@@ -37,6 +37,7 @@ import (
 	"vpn-router/internal/resolver"
 	"vpn-router/internal/singbox"
 	"vpn-router/internal/status"
+	"vpn-router/internal/trace"
 	"vpn-router/internal/vpnbox"
 	"vpn-router/internal/vpndns"
 )
@@ -88,6 +89,11 @@ type Supervisor struct {
 	// A field so a test can write resolvers without signalling a real
 	// mDNSResponder.
 	reloadResolvers func() error
+
+	// trace folds sing-box's per-connection lines into a table of
+	// destinations while somebody is looking for one; see internal/trace.
+	trace      *trace.Collector
+	traceTimer *time.Timer
 }
 
 func New(o Options) (*Supervisor, error) {
@@ -124,6 +130,7 @@ func New(o Options) (*Supervisor, error) {
 		started:    time.Now(),
 		pause:      newPauseState(),
 
+		trace:           trace.New(),
 		reloadResolvers: resolver.Reload,
 		restart: map[string]chan struct{}{
 			status.CompVPN:       make(chan struct{}, 1),
@@ -133,6 +140,13 @@ func New(o Options) (*Supervisor, error) {
 	}
 
 	s.current.Store(cfg)
+
+	// The tap is installed for the life of the daemon and gated by the
+	// collector: a trace that is not running consumes nothing, so no line a
+	// person would otherwise have read goes missing between sessions.
+	o.Bus.SetTap(func(src logbus.Source, lvl logbus.Level, msg string) bool {
+		return src == logbus.SourceSingBox && s.trace.Observe(lvl, msg)
+	})
 
 	// A pause outlives the daemon on purpose: someone who turned the stack
 	// off does not expect a reboot to turn it back on.

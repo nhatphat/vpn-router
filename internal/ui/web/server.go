@@ -34,6 +34,7 @@ import (
 	"vpn-router/internal/config"
 	"vpn-router/internal/ipc"
 	"vpn-router/internal/logbus"
+	"vpn-router/internal/trace"
 )
 
 //go:embed index.html
@@ -118,6 +119,7 @@ func (s *Server) URL() (string, error) {
 	mux.HandleFunc("/events/status", s.guard(s.handleStatusEvents))
 	mux.HandleFunc("/rules", s.guard(s.handleRules))
 	mux.HandleFunc("/resolvers", s.guard(s.handleResolvers))
+	mux.HandleFunc("/trace", s.guard(s.handleTrace))
 
 	srv := &http.Server{
 		Handler: mux,
@@ -218,6 +220,11 @@ func (s *Server) closeIfUnwatched() {
 		s.logf("web: close: %v", err)
 	}
 	s.logf("web: nobody watching; the page is closed until it is asked for again")
+
+	// After the lock is released and the listener is gone: this talks to the
+	// daemon, and holding the page's lock across a socket round trip would
+	// block anything else that touches it.
+	s.stopTraceQuietly()
 }
 
 // guard rejects a request without the token. It compares in constant time out
@@ -558,4 +565,102 @@ func sameOrigin(r *http.Request) bool {
 		return true
 	}
 	return origin == "http://"+r.Host
+}
+
+// handleTrace drives the destination trace: what it has collected, and
+// starting and stopping it.
+//
+// Starting and stopping are separate operations rather than one toggle. Each
+// restarts sing-box, so a toggle that acted on state the page had drawn a
+// moment earlier could restart it twice for one click of a button somebody
+// meant to press once.
+func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.sendTrace(w, ipc.Request{Op: ipc.OpTrace})
+	case http.MethodPost:
+		if !writable(w, r) {
+			return
+		}
+		var op traceOp
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&op); err != nil {
+			s.sendTrace(w, ipc.Request{Op: ipc.OpTrace})
+			return
+		}
+		switch op.Op {
+		case "start":
+			s.logf("web: trace: start")
+			s.sendTrace(w, ipc.Request{Op: ipc.OpTraceStart})
+		case "stop":
+			s.logf("web: trace: stop")
+			s.sendTrace(w, ipc.Request{Op: ipc.OpTraceStop})
+		default:
+			s.sendTrace(w, ipc.Request{Op: ipc.OpTrace})
+		}
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// traceOp is what the page sends to start or stop collecting.
+type traceOp struct {
+	Op string `json:"op"`
+}
+
+// sendTrace performs one trace request against the daemon and writes whatever
+// came back. A failure is reported as a problem with an inactive trace rather
+// than as an empty one, so the page never draws "nothing was reached" over an
+// answer it did not get.
+func (s *Server) sendTrace(w http.ResponseWriter, req ipc.Request) {
+	body := struct {
+		*trace.State
+		Error string `json:"error,omitempty"`
+	}{}
+
+	resp, err := s.Client.Do(req)
+	switch {
+	case err != nil:
+		body.State = &trace.State{Rows: []trace.Row{}}
+		body.Error = err.Error()
+	case resp.Error != "":
+		body.State = &trace.State{Rows: []trace.Row{}}
+		body.Error = resp.Error
+	case resp.Trace == nil:
+		body.State = &trace.State{Rows: []trace.Row{}}
+		body.Error = "the daemon said nothing about the trace"
+	default:
+		body.State = resp.Trace
+		if body.State.Rows == nil {
+			body.State.Rows = []trace.Row{}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		s.logf("web: trace: %v", err)
+	}
+}
+
+// stopTraceQuietly ends a trace nobody is left to stop by hand.
+//
+// The daemon has its own time limit, so this is not the only thing standing
+// between a forgotten trace and a verbose sing-box. It is the prompt one: the
+// page closing is the moment the person went away, and waiting out the
+// daemon's limit would leave sing-box logging every connection for the rest of
+// it, for nobody.
+func (s *Server) stopTraceQuietly() {
+	if s.Client == nil {
+		return
+	}
+	resp, err := s.Client.Do(ipc.Request{Op: ipc.OpTrace})
+	if err != nil || resp.Trace == nil || !resp.Trace.Active {
+		return
+	}
+	if _, err := s.Client.Do(ipc.Request{Op: ipc.OpTraceStop}); err != nil {
+		s.logf("web: could not stop the trace on the way out: %v", err)
+		return
+	}
+	s.logf("web: nobody watching; the trace was stopped")
 }

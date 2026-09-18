@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollapsesSingBoxConnectionSpam(t *testing.T) {
@@ -185,5 +186,57 @@ func TestClassifyCapturedLogIfPresent(t *testing.T) {
 		if strings.HasPrefix(e.Msg, "+0700") {
 			t.Fatalf("timestamp not stripped: %q", e.Msg)
 		}
+	}
+}
+
+// A tap that consumes a message must keep it out of everything downstream. The
+// point of consuming is that the line does not reach the ring, a subscriber or
+// — by way of the daemon mirroring the bus — the log file.
+func TestTapConsumesEntirely(t *testing.T) {
+	b := New(10)
+	ch, release := b.Subscribe(4)
+	defer release()
+
+	b.SetTap(func(_ Source, _ Level, msg string) bool {
+		return strings.HasPrefix(msg, "swallow")
+	})
+
+	b.Publish(SourceSingBox, LevelInfo, "swallow me")
+	b.Publish(SourceSingBox, LevelInfo, "keep me")
+
+	entries := b.Snapshot(0, "")
+	if len(entries) != 1 || entries[0].Msg != "keep me" {
+		t.Fatalf("ring holds %+v, want only \"keep me\"", entries)
+	}
+
+	select {
+	case e := <-ch:
+		if e.Msg != "keep me" {
+			t.Errorf("subscriber received %q", e.Msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber received nothing")
+	}
+
+	select {
+	case e := <-ch:
+		t.Errorf("subscriber also received the consumed line: %q", e.Msg)
+	default:
+	}
+}
+
+// Removing the tap puts the bus back exactly as it was, which is what a trace
+// ending has to do.
+func TestTapCanBeRemoved(t *testing.T) {
+	b := New(10)
+	b.SetTap(func(Source, Level, string) bool { return true })
+	b.Publish(SourceSingBox, LevelInfo, "gone")
+
+	b.SetTap(nil)
+	b.Publish(SourceSingBox, LevelInfo, "back")
+
+	entries := b.Snapshot(0, "")
+	if len(entries) != 1 || entries[0].Msg != "back" {
+		t.Fatalf("ring holds %+v, want only \"back\"", entries)
 	}
 }

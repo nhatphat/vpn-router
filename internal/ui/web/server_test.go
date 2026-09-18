@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"vpn-router/internal/ipc"
 	"vpn-router/internal/logbus"
 	"vpn-router/internal/status"
+	"vpn-router/internal/trace"
 )
 
 // fakeDaemon is the smallest thing that satisfies the control protocol.
@@ -25,6 +27,10 @@ type fakeDaemon struct {
 	// reloadErr makes the daemon refuse one.
 	reloads   atomic.Int32
 	reloadErr error
+
+	mu        sync.Mutex
+	tracing   bool
+	traceRows []trace.Row
 }
 
 func (f *fakeDaemon) Snapshot() status.Snapshot {
@@ -54,6 +60,26 @@ func (f *fakeDaemon) SubscribeStatus(int) (<-chan status.Snapshot, func()) {
 }
 func (f *fakeDaemon) SetPaused(bool) error { return nil }
 func (f *fakeDaemon) Version() string      { return "test" }
+
+func (f *fakeDaemon) TraceState() *trace.State {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &trace.State{Active: f.tracing, Rows: f.traceRows}
+}
+
+func (f *fakeDaemon) StartTrace() (*trace.State, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tracing = true
+	return &trace.State{Active: true, Rows: f.traceRows}, nil
+}
+
+func (f *fakeDaemon) StopTrace() (*trace.State, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tracing = false
+	return &trace.State{Active: false, Rows: f.traceRows}, nil
+}
 
 func serve(t *testing.T) (*Server, string) {
 	t.Helper()
@@ -588,5 +614,115 @@ func TestResolverEditsNeedAConfigPath(t *testing.T) {
 	}
 	if s.ConfigPath != "" {
 		t.Errorf("this test needs a server with no config path, got %q", s.ConfigPath)
+	}
+}
+
+type traceBody struct {
+	Active    bool        `json:"active"`
+	Rows      []trace.Row `json:"rows"`
+	Truncated bool        `json:"truncated"`
+	Error     string      `json:"error"`
+}
+
+func getTrace(t *testing.T, url string) traceBody {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body traceBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return body
+}
+
+func TestTraceStartsAndStops(t *testing.T) {
+	_, daemon, base := serveFull(t)
+	url := strings.Replace(base, "/?t=", "/trace?t=", 1)
+
+	if got := getTrace(t, url); got.Active {
+		t.Fatal("a trace is running before anything asked for one")
+	}
+
+	resp := post(t, url, `{"op":"start"}`)
+	defer resp.Body.Close()
+	var started traceBody
+	if err := json.NewDecoder(resp.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if !started.Active {
+		t.Errorf("start did not report a running trace: %+v", started)
+	}
+	daemon.mu.Lock()
+	running := daemon.tracing
+	daemon.mu.Unlock()
+	if !running {
+		t.Error("the daemon was not asked to start")
+	}
+
+	stop := post(t, url, `{"op":"stop"}`)
+	defer stop.Body.Close()
+	var stopped traceBody
+	if err := json.NewDecoder(stop.Body).Decode(&stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Active {
+		t.Errorf("stop did not report a stopped trace: %+v", stopped)
+	}
+}
+
+// Starting a trace restarts sing-box, which resets every connection through
+// the tunnel. Another origin must not be able to cause that.
+func TestTraceRejectsCrossOriginStart(t *testing.T) {
+	_, daemon, base := serveFull(t)
+	url := strings.Replace(base, "/?t=", "/trace?t=", 1)
+
+	resp := post(t, url, `{"op":"start"}`, "Origin", "http://evil.example")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if daemon.tracing {
+		t.Error("a cross-origin request started a trace")
+	}
+}
+
+func TestTraceNeedsTheToken(t *testing.T) {
+	_, base := serve(t)
+	resp, err := http.Get(strings.Replace(base, "/?t=", "/trace?t=", 1) + "wrong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// The rows the daemon collected have to survive the trip to the page: this is
+// the only thing that carries the answer somebody started a trace to get.
+func TestTraceRowsReachThePage(t *testing.T) {
+	_, daemon, base := serveFull(t)
+	daemon.mu.Lock()
+	daemon.traceRows = []trace.Row{{
+		Process:  "/Applications/Thing.app/Contents/MacOS/Thing",
+		Host:     "api.internal.example",
+		Outbound: "racer",
+		Count:    3,
+	}}
+	daemon.mu.Unlock()
+
+	got := getTrace(t, strings.Replace(base, "/?t=", "/trace?t=", 1))
+	if len(got.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got.Rows))
+	}
+	if got.Rows[0].Host != "api.internal.example" || got.Rows[0].Outbound != "racer" {
+		t.Errorf("row = %+v", got.Rows[0])
 	}
 }

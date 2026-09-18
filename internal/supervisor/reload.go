@@ -30,11 +30,10 @@ func (s *Supervisor) Reload() (*status.ReloadResult, error) {
 		return nil, fmt.Errorf("the config was not applied: %w", err)
 	}
 
-	in, err := singbox.FromConfig(fresh, s.o.RouterProcess)
-	if err != nil {
-		return nil, fmt.Errorf("the config was not applied: %w", err)
-	}
-	doc, err := singbox.Generate(in)
+	// Through s.document so that reloading while a trace is collecting keeps
+	// the raised log level: otherwise the trace would go on saying it was
+	// running with nothing left to feed it.
+	doc, err := s.document(fresh)
 	if err != nil {
 		return nil, fmt.Errorf("the config was not applied: %w", err)
 	}

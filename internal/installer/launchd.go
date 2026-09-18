@@ -100,10 +100,47 @@ func agentPlist(logPath string) string {
 `, AgentLabel, BinaryPath, logPath, logPath)
 }
 
+// mkdirAllAs creates dir and any missing parents, giving the ones it creates
+// to uid:gid. Directories that already exist are left alone: writing a file
+// into somebody's directory is no reason to take the directory over.
+//
+// The ownership matters as much as the file's. An installer running as root
+// that leaves a root-owned directory behind makes the file inside it
+// unreplaceable by the user, because writing it atomically means creating a
+// temporary file in that directory first — which is how ~/.config/vpnctl/rules
+// came to reject every edit to a rule-set the user owned.
+func mkdirAllAs(dir string, uid, gid int) error {
+	var created []string
+	for p := dir; ; p = filepath.Dir(p) {
+		_, err := os.Stat(p)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		created = append(created, p)
+		if parent := filepath.Dir(p); parent == p {
+			break
+		}
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	for _, p := range created {
+		if err := os.Chown(p, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // writeFileAs writes content and sets ownership, creating parents. launchd
 // refuses a plist that is group- or world-writable, so the mode matters.
 func writeFileAs(path, content string, uid, gid int, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirAllAs(filepath.Dir(path), uid, gid); err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {

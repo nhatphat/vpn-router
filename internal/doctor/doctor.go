@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"vpn-router/container"
@@ -187,6 +188,13 @@ func checkReferencedFiles(r *Report, cfg *config.Config) {
 		if f.secret && info.Mode().Perm()&0o077 != 0 {
 			r.warn(f.label, fmt.Sprintf("%s is readable by others (mode %o)", f.path, info.Mode().Perm()),
 				fmt.Sprintf("chmod 600 %s", f.path))
+			continue
+		}
+
+		if f.label == "force-vpn rules" && !rulesDirWritable(f.path) {
+			dir := filepath.Dir(f.path)
+			r.warn(f.label, fmt.Sprintf("%s is readable but not editable: %s belongs to root", f.path, dir),
+				"sudo vpnctl install  (gives the directory back to you)")
 			continue
 		}
 
@@ -623,4 +631,35 @@ func checkDocker(ctx context.Context, r *Report, cfg *config.Config) {
 		r.warn("container spec", "the container predates the current config and will be recreated",
 			"vpnctl restart vpn")
 	}
+}
+
+// rulesDirWritable reports whether the person this installation belongs to can
+// replace the rule-set.
+//
+// Owning the file is not enough. Every write to it goes through a temporary
+// file in the same directory so a crash cannot leave sing-box a rule-set it
+// refuses to load, and creating that temporary file needs the directory. An
+// installer that ran as root and left the directory to root therefore produces
+// a rule-set that reads fine and rejects every edit with "permission denied" —
+// which is worth saying out loud, because nothing else here notices.
+//
+// The owner is checked, not the caller's access: doctor run under sudo would
+// otherwise report a directory as editable that the menu bar cannot touch.
+func rulesDirWritable(path string) bool {
+	uid := os.Getuid()
+	if rec, err := installer.LoadRecord(); err == nil && rec.UID != 0 {
+		uid = rec.UID
+	}
+
+	info, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		// Unreadable for some other reason; the missing-file check above and
+		// the real write will both say more than a guess here would.
+		return true
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	return int(st.Uid) == uid && info.Mode().Perm()&0o200 != 0
 }

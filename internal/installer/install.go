@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"vpn-router/container"
@@ -335,10 +336,7 @@ func ensureConfig(o Options, t *Target) (path string, created bool, err error) {
 	// there is nothing to substitute.
 	body := config.ExampleYAML
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return path, false, err
-	}
-	if err := os.Chown(filepath.Dir(path), t.UID, t.GID); err != nil {
+	if err := mkdirAllAs(filepath.Dir(path), t.UID, t.GID); err != nil {
 		return path, false, err
 	}
 	// 0600 and owned by the user: it sits beside their VPN profile and auth
@@ -352,12 +350,29 @@ func ensureConfig(o Options, t *Target) (path string, created bool, err error) {
 // ensureRulesFile guarantees the force-VPN rule-set exists, because sing-box
 // refuses to start without a file its configuration references. An empty
 // rule-set is the honest default: it forces nothing, and the user fills it in.
+//
+// It also makes sure the directory holding it belongs to the user, repairing
+// installs from before mkdirAllAs: a root-owned rules directory reads fine but
+// refuses every edit, because writing the rule-set atomically means creating a
+// temporary file next to it first.
 func ensureRulesFile(cfg *config.Config, t *Target, o Options) error {
 	path := cfg.SingBox.ForceVPNRules
 	if path == "" {
 		return nil
 	}
+
 	if _, err := os.Stat(path); err == nil {
+		dir := filepath.Dir(path)
+		info, serr := os.Stat(dir)
+		if serr != nil {
+			return serr
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != t.UID {
+			if err := os.Chown(dir, t.UID, t.GID); err != nil {
+				return fmt.Errorf("give %s back to %s: %w", dir, t.User, err)
+			}
+			o.logf("gave %s to %s, so rules can be edited without sudo", dir, t.User)
+		}
 		return nil
 	}
 

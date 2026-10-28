@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,6 +33,7 @@ type ForceVPNRule struct {
 func ForceVPNTypes() []string {
 	return []string{
 		"domain_suffix", "domain", "domain_keyword", "domain_regex",
+		"ip_cidr",
 		"process_name", "process_path", "process_path_regex",
 	}
 }
@@ -230,6 +232,15 @@ func normaliseRule(field, value string) (string, string, error) {
 	}
 
 	switch field {
+	case "ip_cidr":
+		if addr, err := netip.ParseAddr(value); err == nil && addr.Zone() == "" {
+			return field, addr.String(), nil
+		}
+		if prefix, err := netip.ParsePrefix(value); err == nil {
+			return field, prefix.String(), nil
+		}
+		return "", "", fmt.Errorf("enter an IP address or CIDR, like 203.0.113.25 or 10.20.0.0/16")
+
 	case "domain", "domain_suffix":
 		clean, err := NormaliseDomain(value)
 		return field, clean, err

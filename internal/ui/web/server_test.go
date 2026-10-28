@@ -334,6 +334,33 @@ func TestRulesEditEveryMatcherType(t *testing.T) {
 	}
 }
 
+func TestRulesEditIPs(t *testing.T) {
+	s, url := serve(t)
+	rulesFile(t, s, `{"version":4,"rules":[{"domain_suffix":["a.example"]},{"ip_cidr":["192.168.1.25"]}]}`)
+	rules := strings.Replace(url, "/?t=", "/rules?t=", 1)
+
+	for _, step := range []struct {
+		body string
+		want string
+	}{
+		{`{"op":"edit","type":"ip_cidr","value":"192.168.1.25","to":"10.20.0.0/16"}`, "10.20.0.0/16"},
+		{`{"op":"remove","type":"ip_cidr","value":"10.20.0.0/16"}`, ""},
+		{`{"op":"add","type":"ip_cidr","value":"2001:DB8::25"}`, "2001:db8::25"},
+	} {
+		got := rulesReply(t, post(t, rules, step.body))
+		if got.Error != "" {
+			t.Fatal(got.Error)
+		}
+		v := got.values("ip_cidr")
+		if (step.want == "" && len(v) != 0) || (step.want != "" && (len(v) != 1 || v[0] != step.want)) {
+			t.Fatalf("%s: IPs = %v, want %q", step.body, v, step.want)
+		}
+		if v := got.values("domain_suffix"); len(v) != 1 || v[0] != "a.example" {
+			t.Fatalf("domain rule changed: %v", v)
+		}
+	}
+}
+
 // The page builds its type menu from this, so an empty or partial list would
 // silently take matchers away from whoever is looking at it.
 func TestRulesReportTheTypesTheyAccept(t *testing.T) {
@@ -349,7 +376,7 @@ func TestRulesReportTheTypesTheyAccept(t *testing.T) {
 	if !got.Editable {
 		t.Error("a writable rules file reported as not editable")
 	}
-	for _, want := range []string{"domain_suffix", "domain_regex", "process_name", "process_path_regex"} {
+	for _, want := range []string{"domain_suffix", "domain_regex", "ip_cidr", "process_name", "process_path_regex"} {
 		if !strings.Contains(strings.Join(got.Types, " "), want) {
 			t.Errorf("types = %v, want %s among them", got.Types, want)
 		}
@@ -366,7 +393,7 @@ func TestRulesRejectsRubbishAndSaysWhy(t *testing.T) {
 	for _, body := range []string{
 		`{"op":"add","type":"domain_suffix","value":"two words"}`,
 		`{"op":"add","type":"domain_suffix","value":""}`,
-		`{"op":"add","type":"ip_cidr","value":"10.0.0.0/8"}`,
+		`{"op":"add","type":"ip_cidr","value":"10.0.0.0/33"}`,
 		`{"op":"add","type":"domain_regex","value":"[unclosed"}`,
 		`{"op":"edit","type":"domain_suffix","value":"missing.example","to":"b.example"}`,
 		`{"op":"jump","type":"domain_suffix","value":"a.example"}`,

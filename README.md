@@ -178,7 +178,7 @@ never changes behaviour.
 ├── company.ovpn           your OpenVPN profile          (600)  written by setup
 ├── auth.txt               username and password         (600)  written by setup
 ├── .env                   TOTP_SECRET                   (600)  written by setup
-├── rules/force-vpn.json   domains and apps forced through the VPN
+├── rules/force-vpn.json   domains, IPs and apps forced through the VPN
 └── run/vpn-dns            written by the container, read by the DNS router
 ```
 
@@ -189,7 +189,7 @@ dns_router:
   bind_interface: en0     # the physical interface direct traffic binds to
 ```
 
-### Forcing domains or applications through the VPN
+### Forcing domains, IPs or applications through the VPN
 
 `~/.config/vpnctl/rules/force-vpn.json` is a sing-box source rule-set, reloaded
 automatically when it changes — no `vpnctl reload` needed. Use it for
@@ -201,6 +201,7 @@ directly.
   "version": 4,
   "rules": [
     { "domain_suffix": ["customer.example"] },
+    { "ip_cidr": ["203.0.113.25", "10.20.0.0/16", "2001:db8::25"] },
     { "process_name": ["CustomerApp"] },
     { "process_path_regex": ["^/Applications/CustomerApp\\.app/Contents/.*"] }
   ]
@@ -220,10 +221,13 @@ back to direct when the VPN is down.
 This file can be edited without opening it, on the **rules** tab of the log
 page: one row per matcher, with the type beside it, and `+ add a rule` to write
 another. The types offered are `domain_suffix`, `domain`, `domain_keyword`,
-`domain_regex`, `process_name`, `process_path` and `process_path_regex`. Values
+`domain_regex`, `ip_cidr`, `process_name`, `process_path` and `process_path_regex`. Values
 are checked as the type demands — a domain accepts a pasted URL or a
 `*.example` wildcard and is reduced to the suffix, a regex is stored exactly as
-typed but must compile, a process path must be absolute.
+typed but must compile, a process path must be absolute. `ip_cidr` accepts an
+IPv4 or IPv6 address, or a CIDR range. It matches the destination IP even when
+connecting without a domain. Changes apply automatically to new connections;
+reconnect existing sessions to use the updated rules.
 
 A rule that ANDs several fields means something no row can say, so it is listed
 as it stands and left to the file. The menu bar shows the same list under

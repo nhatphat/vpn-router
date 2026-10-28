@@ -175,6 +175,7 @@
       <strong>starting and stopping each reset every connection through the
       tunnel</strong>. Wait for it to say it is collecting, then exercise the
       application.
+      Use “force through VPN” on a domain or IP row to add its rule.
     </p>
     <div class="controls">
       <button id="traceToggle">trace domains</button>
@@ -192,8 +193,9 @@
     <p class="about">
       Destinations that must never be reached directly, whatever the racer
       decides. Matching is by <code>Host</code> and TLS/QUIC SNI for domains,
-      and by executable for processes. sing-box reloads this file itself, so
-      nothing needs restarting.
+      by destination IP or CIDR for <code>ip_cidr</code>, and by executable
+      for processes. sing-box reloads this file automatically; new connections
+      use the updated rules. Reconnect existing sessions to apply a change.
     </p>
     <div id="forcedTable"></div>
   </section>
@@ -695,6 +697,7 @@ function addRuleRow() {
     domain: "exact.customer.example",
     domain_keyword: "customer",
     domain_regex: "^api\\..*\\.example$",
+    ip_cidr: "203.0.113.25 or 10.20.0.0/16 (IPv4/IPv6)",
     process_name: "CustomerApp",
     process_path: "/Applications/CustomerApp.app/Contents/MacOS/CustomerApp",
     process_path_regex: "^/Applications/CustomerApp\\.app/.*",
@@ -897,16 +900,21 @@ function pollTrace() {
   if (!want && tracePoll) { clearInterval(tracePoll); tracePoll = null; }
 }
 
-// forcedBy finds the rule already covering a host, so a row can say it is
-// handled instead of offering to say it twice. A suffix rule covers the names
-// under it, which is the whole reason domain_suffix is the default.
-function forcedBy(host) {
-  return (forced.rules || []).find(r =>
-    r.type === "domain_suffix" && (host === r.value || host.endsWith("." + r.value)));
+// Domain suffixes cover child names. For an IP, recognise the individual
+// address rule, including its equivalent /32 or /128 spelling.
+function forcedBy(host, isIP) {
+  return (forced.rules || []).find(r => {
+    if (isIP) {
+      return r.type === "ip_cidr" &&
+        (r.value === host || r.value === `${host}/${host.includes(":") ? 128 : 32}`);
+    }
+    return (r.type === "domain" && host === r.value) ||
+      (r.type === "domain_suffix" && (host === r.value || host.endsWith("." + r.value)));
+  });
 }
 
-async function forceHost(host) {
-  await ruleOp("add", "domain_suffix", host);
+async function forceHost(host, isIP) {
+  await ruleOp("add", isIP ? "ip_cidr" : "domain_suffix", host);
   refreshTraceActions();
 }
 
@@ -954,16 +962,7 @@ function traceActionCell(row) {
 function fillTraceAction(cell, row) {
   cell.replaceChildren();
 
-  if (row.is_ip) {
-    // Nothing was sniffed, so there is no name for a domain rule to match.
-    const note = document.createElement("span");
-    note.className = "meta";
-    note.textContent = "address only";
-    cell.appendChild(note);
-    return;
-  }
-
-  const rule = forcedBy(row.host);
+  const rule = forcedBy(row.host, row.is_ip);
   if (rule) {
     const note = document.createElement("span");
     note.className = "meta";
@@ -975,7 +974,8 @@ function fillTraceAction(cell, row) {
 
   const button = document.createElement("button");
   button.textContent = "force through VPN";
-  button.onclick = () => forceHost(row.host);
+  button.title = row.is_ip ? "Force this IP address through the VPN" : "Force this domain suffix through the VPN";
+  button.onclick = () => forceHost(row.host, row.is_ip);
   cell.appendChild(button);
 }
 

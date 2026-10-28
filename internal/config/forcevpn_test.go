@@ -190,6 +190,7 @@ func TestEveryTypeAddsAndRemoves(t *testing.T) {
 		"domain":             "exact.example",
 		"domain_keyword":     "-stg.",
 		"domain_regex":       `^api\\..*\\.example$`,
+		"ip_cidr":            "10.20.0.0/16",
 		"process_name":       "CustomerApp",
 		"process_path":       "/Applications/CustomerApp.app/Contents/MacOS/CustomerApp",
 		"process_path_regex": `^/Applications/CustomerApp\\.app/.*`,
@@ -245,7 +246,7 @@ func TestValuesAreCheckedPerType(t *testing.T) {
 		}
 	}
 
-	if _, err := AddForceVPNRule(path, "ip_cidr", "10.0.0.0/8"); err == nil {
+	if _, err := AddForceVPNRule(path, "source_ip_cidr", "10.0.0.0/8"); err == nil {
 		t.Error("a matcher vpnctl does not edit was accepted")
 	}
 
@@ -257,6 +258,45 @@ func TestValuesAreCheckedPerType(t *testing.T) {
 	}
 	if got := valuesOfType(t, path, "domain_regex"); len(got) != 1 || got[0] != pattern {
 		t.Errorf("regex stored as %v, want %q unchanged", got, pattern)
+	}
+}
+
+func TestIPRulesValidateBeforeWriting(t *testing.T) {
+	for _, value := range []string{"", "example.com", "999.1.2.3", "10.0.0.0/33", "2001:db8::/129", "fe80::1%en0", "https://203.0.113.25", "203.0.113.25:443"} {
+		t.Run(value, func(t *testing.T) {
+			body := `{"version":4,"rules":[{"ip_cidr":["203.0.113.25"]}]}`
+			path := writeRules(t, body)
+			if _, err := AddForceVPNRule(path, "ip_cidr", value); err == nil {
+				t.Errorf("add accepted %q", value)
+			}
+			if _, err := EditForceVPNRule(path, "ip_cidr", "203.0.113.25", value); err == nil {
+				t.Errorf("edit accepted %q", value)
+			}
+			if after, _ := os.ReadFile(path); string(after) != body {
+				t.Errorf("invalid IP changed the file: %s", after)
+			}
+		})
+	}
+}
+
+func TestIPRulesAcceptAddressesAndRanges(t *testing.T) {
+	for input, want := range map[string]string{
+		" 203.0.113.25 ":   "203.0.113.25",
+		"203.0.113.25/32":  "203.0.113.25/32",
+		"10.20.0.0/16":     "10.20.0.0/16",
+		"2001:DB8::25":     "2001:db8::25",
+		"2001:db8::25/128": "2001:db8::25/128",
+		"2001:db8::/32":    "2001:db8::/32",
+	} {
+		t.Run(input, func(t *testing.T) {
+			path := writeRules(t, `{"version":4,"rules":[]}`)
+			if _, err := AddForceVPNRule(path, "ip_cidr", input); err != nil {
+				t.Fatal(err)
+			}
+			if got := valuesOfType(t, path, "ip_cidr"); !reflect.DeepEqual(got, []string{want}) {
+				t.Fatalf("stored %v, want %s", got, want)
+			}
+		})
 	}
 }
 

@@ -65,6 +65,16 @@ racer:
   # so this only covers changes nothing noticed. 0 disables the time limit and
   # leaves the generation counter as the only thing expiring a path.
   learned_ttl: 60m
+  # Direct is preferred over the tunnel. A tunnel dial that connects first
+  # still waits this long for direct before it is used, so one dropped packet
+  # on a weak link does not send a public site through the VPN. Destinations
+  # that really need the VPN pay this once per learned_ttl. 0 makes it a plain
+  # first-to-connect race.
+  direct_head_start: 300ms
+  # How long the tunnel is trusted when it won only because direct was slow,
+  # not because direct failed. Kept short so the site goes direct again once
+  # the link recovers. 0 uses learned_ttl.
+  provisional_ttl: 5m
 
 singbox:
   version: 1.13.19

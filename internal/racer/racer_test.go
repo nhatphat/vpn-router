@@ -2,6 +2,7 @@ package racer
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -193,5 +194,172 @@ func TestDialSurvivesAPanic(t *testing.T) {
 	}
 	if conn != nil {
 		t.Error("a connection was returned alongside the error")
+	}
+}
+
+// pathTiming is how one path behaves in a scripted race: it connects, or
+// fails, after a delay. A path that never answers is one whose delay is
+// longer than the race's dial timeout.
+type pathTiming struct {
+	after time.Duration
+	fail  bool
+}
+
+// scriptedRacer races two paths whose timing the test chooses. Connections
+// are one end of a pipe, so the test can tell which path's was returned.
+func scriptedRacer(t *testing.T, direct, socks pathTiming, headStart time.Duration) (*racer, map[string]net.Conn) {
+	t.Helper()
+	near := map[string]net.Conn{}
+	for _, via := range []string{"direct", "socks"} {
+		a, b := net.Pipe()
+		near[via] = a
+		t.Cleanup(func() { a.Close(); b.Close() })
+	}
+	timing := map[string]pathTiming{"direct": direct, "socks": socks}
+
+	r := &racer{
+		dialTimeout: time.Second,
+		logf:        func(f string, a ...any) { t.Logf(f, a...) },
+		generation:  func() uint64 { return 1 },
+		ttl:         time.Hour,
+		headStart:   headStart,
+		provTTL:     5 * time.Minute,
+		dialOverride: func(ctx context.Context, via, _, _ string) (net.Conn, error) {
+			p := timing[via]
+			select {
+			case <-time.After(p.after):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if p.fail {
+				return nil, errors.New(via + " refused")
+			}
+			return near[via], nil
+		},
+	}
+	return r, near
+}
+
+const target = "203.0.113.7:443"
+
+// raceRecorded runs one race and returns the path whose connection came back,
+// checking it is also the path that was recorded.
+func raceRecorded(t *testing.T, r *racer, near map[string]net.Conn) (string, learnedPath) {
+	t.Helper()
+	conn, err := r.race(context.Background(), "tcp", target)
+	if err != nil {
+		t.Fatalf("race: %v", err)
+	}
+	got := ""
+	for via, c := range near {
+		if c == conn {
+			got = via
+		}
+	}
+	stored, ok := r.learned.Load(target)
+	if !ok {
+		t.Fatal("the race recorded nothing")
+	}
+	p := stored.(learnedPath)
+	if p.via != got {
+		t.Errorf("returned the %s connection but recorded %s", got, p.via)
+	}
+	return got, p
+}
+
+func TestRaceDirectWinsWhenItConnects(t *testing.T) {
+	r, near := scriptedRacer(t, pathTiming{after: 80 * time.Millisecond}, pathTiming{after: 10 * time.Millisecond}, 300*time.Millisecond)
+	got, p := raceRecorded(t, r, near)
+	if got != "direct" {
+		t.Fatalf("a direct dial that connected inside the head start lost to socks (%s)", got)
+	}
+	if p.ttl != 0 {
+		t.Errorf("a direct win got a special ttl %s", p.ttl)
+	}
+}
+
+// TestRaceSlowDirectIsOnlyProvisional is the weak-network case: socks
+// connected, direct is still retrying. Socks is used after the head start,
+// and trusted only briefly.
+func TestRaceSlowDirectIsOnlyProvisional(t *testing.T) {
+	r, near := scriptedRacer(t, pathTiming{after: 900 * time.Millisecond}, pathTiming{after: 10 * time.Millisecond}, 100*time.Millisecond)
+
+	began := time.Now()
+	got, p := raceRecorded(t, r, near)
+	took := time.Since(began)
+
+	if got != "socks" {
+		t.Fatalf("want socks once the head start ran out, got %s", got)
+	}
+	if took < 100*time.Millisecond || took > 500*time.Millisecond {
+		t.Errorf("settled after %s, want shortly after the 100ms head start", took)
+	}
+	if p.ttl != 5*time.Minute {
+		t.Errorf("a slow-direct socks win was trusted for %s, want the provisional 5m", p.ttl)
+	}
+}
+
+// TestRaceFailedDirectHandsOverAtOnce: when direct has failed, there is
+// nothing to wait for, and the decision is a firm one.
+func TestRaceFailedDirectHandsOverAtOnce(t *testing.T) {
+	r, near := scriptedRacer(t, pathTiming{after: 5 * time.Millisecond, fail: true}, pathTiming{after: 20 * time.Millisecond}, 300*time.Millisecond)
+
+	began := time.Now()
+	got, p := raceRecorded(t, r, near)
+	if took := time.Since(began); took > 200*time.Millisecond {
+		t.Errorf("waited %s for a direct dial that had already failed", took)
+	}
+	if got != "socks" {
+		t.Fatalf("want socks, got %s", got)
+	}
+	if p.ttl != 0 {
+		t.Errorf("a firm socks win got ttl %s, want the normal limit", p.ttl)
+	}
+}
+
+// TestRaceDirectFailingDuringHeadStart: socks connected first, then direct
+// failed before the head start ran out. Socks wins at that moment, firmly.
+func TestRaceDirectFailingDuringHeadStart(t *testing.T) {
+	r, near := scriptedRacer(t, pathTiming{after: 60 * time.Millisecond, fail: true}, pathTiming{after: 10 * time.Millisecond}, 300*time.Millisecond)
+
+	began := time.Now()
+	got, p := raceRecorded(t, r, near)
+	if took := time.Since(began); took > 250*time.Millisecond {
+		t.Errorf("settled after %s, want as soon as direct failed", took)
+	}
+	if got != "socks" || p.ttl != 0 {
+		t.Errorf("got %s with ttl %s, want a firm socks win", got, p.ttl)
+	}
+}
+
+// TestRaceZeroHeadStartIsFirstToConnect keeps the old behaviour reachable.
+func TestRaceZeroHeadStartIsFirstToConnect(t *testing.T) {
+	r, near := scriptedRacer(t, pathTiming{after: 200 * time.Millisecond}, pathTiming{after: 10 * time.Millisecond}, 0)
+	if got, _ := raceRecorded(t, r, near); got != "socks" {
+		t.Errorf("with no head start the first to connect should win, got %s", got)
+	}
+}
+
+func TestRaceBothFail(t *testing.T) {
+	r, _ := scriptedRacer(t, pathTiming{after: 10 * time.Millisecond, fail: true}, pathTiming{after: 20 * time.Millisecond, fail: true}, 300*time.Millisecond)
+	if conn, err := r.race(context.Background(), "tcp", target); err == nil {
+		conn.Close()
+		t.Fatal("expected an error when both paths fail")
+	}
+	if _, ok := r.learned.Load(target); ok {
+		t.Error("a failed race recorded a path")
+	}
+}
+
+// TestProvisionalEntryExpiresSooner checks stale() honours the per-entry ttl.
+func TestProvisionalEntryExpiresSooner(t *testing.T) {
+	r := &racer{generation: func() uint64 { return 1 }, ttl: time.Hour}
+	p := learnedPath{via: "socks", gen: 1, at: time.Now().Add(-6 * time.Minute), ttl: 5 * time.Minute}
+	if expired, _ := r.stale(p, time.Now()); !expired {
+		t.Error("a provisional entry outlived its own ttl")
+	}
+	p.ttl = 0
+	if expired, why := r.stale(p, time.Now()); expired {
+		t.Errorf("a normal entry expired early: %s", why)
 	}
 }

@@ -25,8 +25,10 @@ Two mechanisms do that:
   resolver, once against the DNS servers the VPN pushed. A private-IP answer
   from the corporate side wins, which makes the destination route itself.
 - **For addresses that look public but are only reachable inside the tunnel**,
-  both paths are dialled at once and the first to connect wins, then remembered
-  for that destination.
+  both paths are dialled at once and the winner is remembered for that
+  destination. Direct is preferred: the tunnel wins only if direct fails, or is
+  still pending after a short head start (`racer.direct_head_start`, 300ms), so
+  a dropped packet on a weak link does not send a public site through the VPN.
 
 Measured against the same transfer bypassing the stack entirely, throughput is
 indistinguishable and a new connection costs a few milliseconds more.

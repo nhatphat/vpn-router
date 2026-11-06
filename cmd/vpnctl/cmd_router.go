@@ -102,12 +102,14 @@ func runRouter(args []string) error {
 	})
 	g.Go(func() error {
 		return racer.Start(ctx, racer.Config{
-			Listen:      cfg.Racer.Listen,
-			SocksAddr:   cfg.Docker.Socks,
-			DialTimeout: cfg.Racer.DialTimeout.D(),
-			RelayBuffer: cfg.Racer.RelayBuffer.Bytes(),
-			LearnedTTL:  cfg.Racer.LearnedTTL.D(),
-			BindIP:      bindIP,
+			Listen:          cfg.Racer.Listen,
+			SocksAddr:       cfg.Docker.Socks,
+			DialTimeout:     cfg.Racer.DialTimeout.D(),
+			RelayBuffer:     cfg.Racer.RelayBuffer.Bytes(),
+			LearnedTTL:      cfg.Racer.LearnedTTL.D(),
+			DirectHeadStart: cfg.Racer.DirectHeadStart.D(),
+			ProvisionalTTL:  cfg.Racer.ProvisionalTTL.D(),
+			BindIP:          bindIP,
 		})
 	})
 

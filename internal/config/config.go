@@ -135,6 +135,15 @@ type Racer struct {
 	// anything visible changes — the tunnel coming up, the interface getting
 	// a new address — and this covers the changes nothing noticed.
 	LearnedTTL Duration `yaml:"learned_ttl"`
+
+	// DirectHeadStart is how long the racer waits for a direct dial before
+	// accepting a socks dial that already connected. Without it one dropped
+	// SYN on a weak link hands a public destination to the VPN.
+	DirectHeadStart Duration `yaml:"direct_head_start"`
+
+	// ProvisionalTTL is how long a socks win is trusted when direct had not
+	// failed, only not answered within the head start.
+	ProvisionalTTL Duration `yaml:"provisional_ttl"`
 }
 
 type SingBox struct {
@@ -233,6 +242,9 @@ func Defaults() Config {
 			DialTimeout: Duration(1500 * time.Millisecond),
 			RelayBuffer: 32 << 10,
 			LearnedTTL:  Duration(60 * time.Minute),
+
+			DirectHeadStart: Duration(300 * time.Millisecond),
+			ProvisionalTTL:  Duration(5 * time.Minute),
 		},
 		SingBox: SingBox{
 			Version:       DefaultSingBoxVersion,
@@ -365,6 +377,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Racer.LearnedTTL < 0 {
 		add("racer.learned_ttl must not be negative")
+	}
+	if c.Racer.DirectHeadStart < 0 {
+		add("racer.direct_head_start must not be negative")
+	} else if c.Racer.DirectHeadStart >= c.Racer.DialTimeout && c.Racer.DialTimeout > 0 {
+		add("racer.direct_head_start (%s) must be shorter than racer.dial_timeout (%s)",
+			c.Racer.DirectHeadStart.D(), c.Racer.DialTimeout.D())
+	}
+	if c.Racer.ProvisionalTTL < 0 {
+		add("racer.provisional_ttl must not be negative")
 	}
 
 	seen := map[string]bool{}

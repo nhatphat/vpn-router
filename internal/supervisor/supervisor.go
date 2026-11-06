@@ -241,14 +241,16 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return s.runService(ctx, status.CompRacer, func(c context.Context) error {
 			cfg := s.cfg()
 			return racer.Start(c, racer.Config{
-				Listen:      cfg.Racer.Listen,
-				SocksAddr:   cfg.Docker.Socks,
-				DialTimeout: cfg.Racer.DialTimeout.D(),
-				RelayBuffer: cfg.Racer.RelayBuffer.Bytes(),
-				Generation:  s.currentGeneration,
-				LearnedTTL:  cfg.Racer.LearnedTTL.D(),
-				BindIP:      s.holder.IP,
-				Logf:        s.o.Bus.Logf(logbus.SourceRacer, logbus.LevelInfo),
+				Listen:          cfg.Racer.Listen,
+				SocksAddr:       cfg.Docker.Socks,
+				DialTimeout:     cfg.Racer.DialTimeout.D(),
+				RelayBuffer:     cfg.Racer.RelayBuffer.Bytes(),
+				Generation:      s.currentGeneration,
+				LearnedTTL:      cfg.Racer.LearnedTTL.D(),
+				DirectHeadStart: cfg.Racer.DirectHeadStart.D(),
+				ProvisionalTTL:  cfg.Racer.ProvisionalTTL.D(),
+				BindIP:          s.holder.IP,
+				Logf:            s.o.Bus.Logf(logbus.SourceRacer, logbus.LevelInfo),
 			})
 		})
 	})

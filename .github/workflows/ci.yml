@@ -14,7 +14,7 @@ jobs:
     # macOS, and not by preference: the router binds a routing socket and the
     # supervisor drives launchd, so the module does not compile anywhere else.
     # An Ubuntu runner would fail in a way that says nothing useful.
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v7
